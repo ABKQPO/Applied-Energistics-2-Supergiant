@@ -43,7 +43,10 @@ import net.minecraft.world.IBlockAccess;
 import net.minecraft.world.World;
 
 import org.jetbrains.annotations.Nullable;
+import org.jspecify.annotations.NonNull;
+
 import java.util.List;
+import java.util.Objects;
 
 public class TinyTNTBlock extends AEBaseBlock {
 
@@ -60,13 +63,13 @@ public class TinyTNTBlock extends AEBaseBlock {
     }
 
     @Override
-    public AxisAlignedBB getBoundingBox(IBlockState state, IBlockAccess source, BlockPos pos) {
+    public @NonNull AxisAlignedBB getBoundingBox(IBlockState state, IBlockAccess source, BlockPos pos) {
         return SHAPE;
     }
 
     @Override
     @SuppressWarnings("deprecation")
-    public AxisAlignedBB getCollisionBoundingBox(IBlockState state, IBlockAccess worldIn, BlockPos pos) {
+    public AxisAlignedBB getCollisionBoundingBox(@NonNull IBlockState state, @NonNull IBlockAccess worldIn, @NonNull BlockPos pos) {
         return SHAPE;
     }
 
@@ -76,8 +79,8 @@ public class TinyTNTBlock extends AEBaseBlock {
     }
 
     @Override
-    public boolean onBlockActivated(World world, BlockPos pos, IBlockState state, EntityPlayer player, EnumHand hand,
-                                    EnumFacing side, float hitX, float hitY, float hitZ) {
+    public boolean onBlockActivated(@NonNull World world, @NonNull BlockPos pos, @NonNull IBlockState state, EntityPlayer player, @NonNull EnumHand hand,
+                                    @NonNull EnumFacing side, float hitX, float hitY, float hitZ) {
         ItemStack heldItem = player.getHeldItem(hand);
         if (!heldItem.isEmpty() && (heldItem.getItem() == Items.FLINT_AND_STEEL
             || heldItem.getItem() == Items.FIRE_CHARGE)) {
@@ -91,7 +94,7 @@ public class TinyTNTBlock extends AEBaseBlock {
                     heldItem.shrink(1);
                 }
             }
-            player.addStat(StatList.getObjectUseStats(item));
+            player.addStat(Objects.requireNonNull(StatList.getObjectUseStats(item)));
             return true;
         }
 
@@ -110,7 +113,7 @@ public class TinyTNTBlock extends AEBaseBlock {
 
     @Override
     @SuppressWarnings("deprecation")
-    public void neighborChanged(IBlockState state, World world, BlockPos pos, Block blockIn, BlockPos fromPos) {
+    public void neighborChanged(@NonNull IBlockState state, World world, @NonNull BlockPos pos, @NonNull Block blockIn, @NonNull BlockPos fromPos) {
         if (world.getRedstonePowerFromNeighbors(pos) > 0) {
             this.startFuse(world, pos, null);
             world.setBlockToAir(pos);
@@ -118,7 +121,7 @@ public class TinyTNTBlock extends AEBaseBlock {
     }
 
     @Override
-    public void onBlockAdded(World world, BlockPos pos, IBlockState state) {
+    public void onBlockAdded(@NonNull World world, @NonNull BlockPos pos, @NonNull IBlockState state) {
         super.onBlockAdded(world, pos, state);
 
         if (world.getRedstonePowerFromNeighbors(pos) > 0) {
@@ -128,7 +131,7 @@ public class TinyTNTBlock extends AEBaseBlock {
     }
 
     @Override
-    public void onEntityWalk(World world, BlockPos pos, Entity entity) {
+    public void onEntityWalk(World world, @NonNull BlockPos pos, @NonNull Entity entity) {
         if (!world.isRemote && entity instanceof EntityArrow arrow) {
             if (arrow.isBurning()) {
                 EntityLivingBase igniter = arrow.shootingEntity instanceof EntityLivingBase
@@ -141,12 +144,12 @@ public class TinyTNTBlock extends AEBaseBlock {
     }
 
     @Override
-    public boolean canDropFromExplosion(Explosion exp) {
+    public boolean canDropFromExplosion(@NonNull Explosion exp) {
         return false;
     }
 
     @Override
-    public void onBlockExploded(World world, BlockPos pos, Explosion exp) {
+    public void onBlockExploded(@NonNull World world, @NonNull BlockPos pos, @NonNull Explosion exp) {
         super.onBlockExploded(world, pos, exp);
         if (!world.isRemote) {
             TinyTNTPrimedEntity primedTinyTNTEntity = new TinyTNTPrimedEntity(world, pos.getX() + 0.5F, pos.getY(),
@@ -157,9 +160,11 @@ public class TinyTNTBlock extends AEBaseBlock {
         }
     }
 
+    @SuppressWarnings("deprecation")
     @Override
     public void addCollisionBoxToList(IBlockState state, World worldIn, BlockPos pos, AxisAlignedBB entityBox,
                                       List<AxisAlignedBB> collidingBoxes, @Nullable Entity entityIn, boolean isActualState) {
+
         addCollisionBoxToList(pos, entityBox, collidingBoxes, SHAPE);
     }
 }

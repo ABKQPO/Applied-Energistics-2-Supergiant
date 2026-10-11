@@ -17,6 +17,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 public class RequestClosestMeteoritePacket extends ServerboundPacket {
+    @SuppressWarnings("deprecation")
     private static final Cache<UUID, RequestWindow> REQUEST_WINDOWS = CacheBuilder.newBuilder()
                                                                                   .expireAfterAccess(1,
                                                                                       TimeUnit.MINUTES)

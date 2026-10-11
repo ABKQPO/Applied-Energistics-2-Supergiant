@@ -15,6 +15,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /** Repairs plain JEI cancelling bookmark drags when the left overlay temporarily has no room. */
 @Mixin(value = BookmarkOverlay.class, remap = false)
+@SuppressWarnings("target")
 public abstract class MixinBookmarkOverlay {
     @Shadow
     @Final

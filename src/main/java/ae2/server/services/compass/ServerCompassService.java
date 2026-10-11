@@ -26,11 +26,13 @@ import java.util.concurrent.TimeUnit;
 
 public final class ServerCompassService {
     private static final int LOADED_CHUNK_INDEX_RADIUS = 8;
+    @SuppressWarnings("deprecation")
     private static final Cache<ChunkIndexQuery, Boolean> CHUNK_INDEX_ATTEMPT_CACHE = CacheBuilder.newBuilder()
                                                                                                  .maximumSize(4096)
                                                                                                  .expireAfterWrite(5,
                                                                                                      TimeUnit.SECONDS)
                                                                                                  .build();
+    @SuppressWarnings("deprecation")
     private static final LoadingCache<RegionQuery, ObjectList<BlockPos>> METEORITE_TARGET_CACHE =
         CacheBuilder.newBuilder()
                     .maximumSize(512)

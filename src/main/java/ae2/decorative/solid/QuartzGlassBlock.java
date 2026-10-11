@@ -118,6 +118,7 @@ public class QuartzGlassBlock extends BlockGlass {
         return ((IExtendedBlockState) state).withProperty(GLASS_STATE, getGlassState(level, state, pos));
     }
 
+    @SuppressWarnings("deprecation")
     @Override
     public boolean shouldSideBeRendered(IBlockState state, IBlockAccess level, BlockPos pos, EnumFacing side) {
         IBlockState adjacentBlockState = level.getBlockState(pos.offset(side));

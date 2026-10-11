@@ -5,8 +5,7 @@ plugins {
     id 'signing'
     id 'org.jetbrains.gradle.plugin.idea-ext' version '1.4.1'
     id 'com.gradleup.shadow' version '9.4.0'
-    id 'xyz.wagyourtail.unimined' version '1.4.37-kappa'
-    id 'net.kyori.blossom' version '2.2.0'
+    id 'net.neoforged.moddev.mcpforge' version '2.0.185-legacy'
     id 'com.diffplug.spotless' version '8.4.0'
 }
 
@@ -102,34 +101,33 @@ repositories {
 configurations {
     contain
     implementation.extendsFrom(contain)
-    modCompileOnly
-    compileOnly.extendsFrom(modCompileOnly)
-    modRuntimeOnly
-    runtimeOnly.extendsFrom(modRuntimeOnly)
 }
 
-String remapTaskName = propertyBool('enable_shadow') ? "remapShadowJar" : "remapJar"
+String reobfTaskName = 'reobfJar'
 
-unimined.minecraft {
-    version "1.12.2"
-
-    mappings {
-        mcp("stable", "39-1.12")
+//noinspection GroovyAssignabilityCheck
+mcpForge {
+    if (propertyBool('use_access_transformer')) {
+        accessTransformers.from(propertyStringList('access_transformer_locations').collect {
+            "src/main/resources/${it}"
+        })
     }
 
-    cleanroom {
-        if (propertyBool('use_access_transformer')) {
-            accessTransformer "${rootProject.projectDir}/src/main/resources/${propertyString('access_transformer_locations')}"
-        }
-        loader "0.6.13-alpha"
-        runs.auth.username = minecraft_username
-        runs.all {
-            systemProperty('crl.dev.mixin', "ae2.default.mixins.json,ae2.mod.mixins.json")
+    enable {
+        cleanroomVersion = '0.6.13-alpha'
+        mcpMappings = 'de.oceanlabs.mcp:mcp_stable:39-1.12@zip'
+        obfuscateJar = !propertyBool('enable_shadow')
+    }
+
+    runs {
+        configureEach {
+            programArguments.addAll('--username', propertyString('minecraft_username'))
+            systemProperty('crl.dev.mixin', 'ae2.default.mixins.json,ae2.mod.mixins.json')
+            systemProperty('mixin.debug.export', 'true')
             def extraArgs = propertyString('extra_jvm_args')
             if (extraArgs != null && !extraArgs.trim().isEmpty()) {
-                jvmArgs += extraArgs.split { "\\s+" }.toList()
+                extraArgs.trim().split(/\s+/).each { jvmArgument(it) }
             }
-            systemProperty('mixin.debug.export', 'true')
             if (propertyBool('enable_foundation_debug')) {
                 systemProperty("foundation.dump", "true")
                 systemProperty("foundation.verbose", "true")
@@ -137,28 +135,52 @@ unimined.minecraft {
             if (propertyBool('is_coremod')) {
                 systemProperty("fml.coreMods.load", propertyString('coremod_plugin_class_name'))
             }
-            return
         }
-    }
-
-    defaultRemapJar = false
-
-    String jarTaskName = propertyBool('enable_shadow') ? "shadowJar" : "jar"
-
-    remap(tasks.named(jarTaskName).get()) {
-        mixinRemap {
-            enableBaseMixin()
-            enableMixinExtra()
+        client {
+            client()
+            disableIdeRun()
+        }
+        server {
+            server()
+            disableIdeRun()
+            systemProperty 'fml.queryResult', 'confirm'
         }
     }
 
     mods {
-        remap(configurations.modCompileOnly)
-        remap(configurations.modRuntimeOnly)
+        create(propertyString('mod_id')) {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+if (propertyBool('enable_shadow')) {
+    def reobfShadowJar = obfuscation.reobfuscate(tasks.named('shadowJar'), sourceSets.main)
+    reobfTaskName = reobfShadowJar.name
+    tasks.named('assemble').configure {
+        dependsOn reobfShadowJar
+    }
+}
+
+boolean useMixins = propertyBool('use_mixins')
+def mixinConfigs = propertyStringList('mixin_configs', ',')
+if (useMixins) {
+    mixin {
+        mixinConfigs.each { config(it) }
+        String refmap = propertyString('mixin_refmap')
+        if (!refmap.isBlank()) {
+            add(refmap)
+        }
+        messages([
+                ACCESSOR_TARGET_NOT_FOUND: 'disabled'
+        ])
     }
 }
 
 dependencies {
+    if (useMixins) {
+        annotationProcessor 'com.cleanroommc:cleanmix:0.7.2'
+    }
     if (propertyBool('use_lombok_ap')) {
         compileOnly "org.projectlombok:lombok:${propertyString('lombok_version')}"
         annotationProcessor "org.projectlombok:lombok:${propertyString('lombok_version')}"
@@ -174,6 +196,7 @@ dependencies {
         testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     }
     compileOnly 'com.google.code.findbugs:jsr305:3.0.2'
+    compileOnly 'org.jetbrains:annotations:26.0.2'
 }
 
 apply from: 'gradle/scripts/dependencies.gradle'
@@ -233,31 +256,6 @@ sourceSets {
     main {
         java {
             srcDir generatedTagsSourceDir
-        }
-
-        blossom {
-            javaSources {
-                property('mod_id', propertyString('mod_id'))
-                property('mod_name', propertyString('mod_name'))
-                property('mod_version', propertyString('mod_version'))
-                property('package', "${root_package}")
-            }
-            resources {
-                property('mod_id', propertyString('mod_id'))
-                property('mod_name', propertyString('mod_name'))
-                property('mod_version', propertyString('mod_version'))
-                property('mod_description', propertyString('mod_description'))
-                property('mod_authors', propertyStringList('mod_authors', ',').collect {it.strip()}.join('", "'))
-                property('mod_credits', propertyString('mod_credits'))
-                property('mod_license', propertyString('mod_license'))
-                property('mod_url', propertyString('mod_url'))
-                property('mod_issue_tracker_url', propertyString('mod_issue_tracker_url'))
-                property('mod_update_json', propertyString('mod_update_json'))
-                property('mod_icon_item', propertyString('mod_icon_item'))
-                property('mod_logo_path', propertyString('mod_logo_path'))
-                property('mod_icon_path', propertyString('mod_icon_path'))
-                property('mod_background_path', propertyString('mod_background_path'))
-            }
         }
     }
 
@@ -371,7 +369,7 @@ jar {
             attributes(attribute_map)
         }
     }
-    finalizedBy(tasks.named(remapTaskName).get())
+    finalizedBy(tasks.named(reobfTaskName).get())
 }
 
 
@@ -381,7 +379,7 @@ shadowJar {
 }
 
 
-tasks.named(remapTaskName).configure {
+tasks.named(reobfTaskName).configure {
     doFirst {
         logging.captureStandardOutput LogLevel.INFO
     }
