@@ -179,6 +179,7 @@ if (useMixins) {
 
 dependencies {
     if (useMixins) {
+        annotationProcessor 'com.cleanroommc:mixinextras-common:0.5.5'
         annotationProcessor 'com.cleanroommc:cleanmix:0.7.2'
     }
     if (propertyBool('use_lombok_ap')) {
