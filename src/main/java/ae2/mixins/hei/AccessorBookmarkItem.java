@@ -4,14 +4,15 @@ import mezz.jei.bookmarks.BookmarkItem;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
 
+// HEI
 @Mixin(value = BookmarkItem.class, remap = false)
 public interface AccessorBookmarkItem<I> {
     @Accessor("ingredient")
-    I i_getIngredient();
+    I ae2$getIngredient();
 
     @Accessor("amount")
-    long i_getAmount();
+    long ae2$getAmount();
 
     @Accessor("amount")
-    void i_setAmount(long amount);
+    void ae2$setAmount(long amount);
 }

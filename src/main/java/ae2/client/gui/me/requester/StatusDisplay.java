@@ -10,7 +10,7 @@ import net.minecraft.util.text.ITextComponent;
 import net.minecraft.util.text.Style;
 import net.minecraft.util.text.TextComponentString;
 import net.minecraft.util.text.TextFormatting;
-import org.jspecify.annotations.NonNull;
+import org.jetbrains.annotations.NotNull;
 
 import java.awt.Rectangle;
 import java.util.ArrayList;
@@ -110,7 +110,7 @@ public final class StatusDisplay implements ITooltip {
     }
 
     @Override
-    public @NonNull List<ITextComponent> getTooltipMessage() {
+    public @NotNull List<ITextComponent> getTooltipMessage() {
         boolean showAllStatuses = GuiScreen.isShiftKeyDown();
         List<ITextComponent> tooltip = new ArrayList<>(showAllStatuses ? 20 : 4);
         tooltip.add(GuiText.RequesterStatus.text());

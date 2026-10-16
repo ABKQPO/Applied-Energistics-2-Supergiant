@@ -19,7 +19,7 @@ import it.unimi.dsi.fastutil.objects.ObjectSet;
 import it.unimi.dsi.fastutil.objects.Reference2ObjectMap;
 import it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap;
 import org.jetbrains.annotations.Nullable;
-import org.jspecify.annotations.NonNull;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.Collection;
 import java.util.Collections;
@@ -707,7 +707,7 @@ public class NetworkCraftingProviders {
         }
 
         @Override
-        public @NonNull Iterator<ICraftingProvider> iterator() {
+        public @NotNull Iterator<ICraftingProvider> iterator() {
             synchronized (lock) {
                 ensureOrder();
                 return new Iterator<>() {

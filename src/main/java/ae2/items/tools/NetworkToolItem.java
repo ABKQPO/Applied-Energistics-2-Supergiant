@@ -68,7 +68,7 @@ import net.minecraft.util.math.RayTraceResult;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
 import org.jetbrains.annotations.Nullable;
-import org.jspecify.annotations.NonNull;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.Collections;
 import java.util.Comparator;
@@ -290,17 +290,17 @@ public class NetworkToolItem extends AEBaseItem implements IGuiItem, IStackToolt
     }
 
     @Override
-    public boolean canUse(@NonNull EnumHand enumHand, @NonNull EntityPlayer entityPlayer, @NonNull BlockPos blockPos) {
+    public boolean canUse(@NotNull EnumHand enumHand, @NotNull EntityPlayer entityPlayer, @NotNull BlockPos blockPos) {
         return true;
     }
 
     @Override
-    public void used(@NonNull EnumHand enumHand, @NonNull EntityPlayer entityPlayer, @NonNull BlockPos blockPos) {
+    public void used(@NotNull EnumHand enumHand, @NotNull EntityPlayer entityPlayer, @NotNull BlockPos blockPos) {
 
     }
 
     @Override
-    public boolean shouldHideFacades(@NonNull ItemStack itemStack, @NonNull EntityPlayer entityPlayer) {
+    public boolean shouldHideFacades(@NotNull ItemStack itemStack, @NotNull EntityPlayer entityPlayer) {
         ConduitDisplayMode curMode = ConduitDisplayMode.getDisplayMode(itemStack);
         return curMode != ConduitDisplayMode.NONE && curMode != ConduitDisplayMode.NEUTRAL;
     }

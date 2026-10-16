@@ -3,9 +3,9 @@ package ae2.mixins.hei;
 import mezz.jei.gui.ghost.GhostIngredientDragManager;
 import mezz.jei.gui.overlay.bookmarks.BookmarkOverlay;
 import mezz.jei.gui.overlay.bookmarks.ILeftAreaContent;
-import mezz.jei.gui.overlay.bookmarks.LeftAreaDispatcher;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -14,8 +14,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.List;
 
+// JEI
 /** Routes clicks outside the bookmark panel to its active ghost drag, like JEI's ingredient-list overlay does. */
-@Mixin(value = LeftAreaDispatcher.class, remap = false)
+@Pseudo
+@Mixin(targets = "mezz.jei.gui.overlay.bookmarks.LeftAreaDispatcher", remap = false)
 public abstract class MixinLeftAreaDispatcher {
     @Shadow
     @Final

@@ -18,7 +18,7 @@ import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.ResourceLocation;
 import org.jetbrains.annotations.Nullable;
-import org.jspecify.annotations.NonNull;
+import org.jetbrains.annotations.NotNull;
 
 import java.text.NumberFormat;
 import java.util.Collections;
@@ -253,7 +253,7 @@ final class CellViewRecipe implements IRecipeWrapper {
     }
 
     @Override
-    public void getIngredients(@NonNull IIngredients ingredients) {
+    public void getIngredients(@NotNull IIngredients ingredients) {
         var wrapped = new ObjectArrayList<ItemStack>(this.contents.size());
         for (int i = 0; i < this.contents.size(); i++) {
             wrapped.add(GenericStack.wrapInItemStack(this.contents.get(i)));
@@ -262,7 +262,7 @@ final class CellViewRecipe implements IRecipeWrapper {
     }
 
     @Override
-    public void drawInfo(@NonNull Minecraft minecraft, int recipeWidth, int recipeHeight, int mouseX, int mouseY) {
+    public void drawInfo(@NotNull Minecraft minecraft, int recipeWidth, int recipeHeight, int mouseX, int mouseY) {
         if (!this.text.firstLine().isEmpty()) {
             drawHeaderLine(minecraft, this.text.firstLine(), recipeWidth, this.text.firstLineY());
         }

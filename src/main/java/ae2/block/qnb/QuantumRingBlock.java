@@ -28,7 +28,7 @@ import net.minecraft.world.IBlockAccess;
 import net.minecraft.world.World;
 
 import org.jetbrains.annotations.Nullable;
-import org.jspecify.annotations.NonNull;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
 
@@ -48,7 +48,7 @@ public class QuantumRingBlock extends QuantumBaseBlock {
     }
 
     @Override
-    public @NonNull AxisAlignedBB getBoundingBox(IBlockState state, IBlockAccess source, BlockPos pos) {
+    public @NotNull AxisAlignedBB getBoundingBox(IBlockState state, IBlockAccess source, BlockPos pos) {
         TileQuantumBridge bridge = this.getTileEntity(source, pos);
         if (bridge != null && bridge.isFormed() && !bridge.isCorner()) {
             return FULL_BLOCK_AABB;

@@ -1,15 +1,22 @@
 apply from: 'gradle/scripts/helpers.gradle'
 
 repositories {
-    // Other repositories described by default:
-    // CleanroomMC: https://maven.cleanroommc.com
+    flatDir {
+        dirs('libs') // /libs
+    }
     maven {
         name = 'CleanroomMC'
         url = 'https://maven.cleanroommc.com'
+        content {
+            includeGroup 'mezz'
+        }
     }
     maven {
         name = 'CurseMaven'
         url = 'https://cursemaven.com'
+        content {
+            includeGroup 'curse.maven'
+        }
     }
     maven {
         name = 'CleanroomCurseMaven'
@@ -21,63 +28,111 @@ repositories {
     maven {
         name = 'Modrinth'
         url = 'https://api.modrinth.com/maven'
+        content {
+            includeGroup 'maven.modrinth'
+        }
     }
     maven {
-        name = "ModMaven"
-        url  = uri("https://modmaven.dev/")
+        name = 'BlameJared'
+        url = 'https://maven.blamejared.com/'
+        content {
+            includeGroup 'CraftTweaker2'
+            includeGroup 'mezz.jei'
+        }
     }
     mavenCentral()
-    mavenLocal()
-    maven {
-        url = 'https://www.jitpack.io'
-    }
+    mavenLocal() // Must be last for caching to work
 }
 
 dependencies {
-    compileOnly "com.cleanroommc:sponge-mixin:0.20.12+mixin.0.8.7"
-    if (propertyBool('enable_lwjglx')) {
-        compileOnly "com.cleanroommc:lwjglx:1.0.0"
+    // Example - Dependency descriptor:
+    // 'com.google.code.gson:gson:2.8.6' << group: com.google.code.gson, name:gson, version:2.8.6
+    // 'group:name:version:classifier' where classifier is optional
+
+    // Example - Shading dependencies:
+    // Using the shadow plugin, by using the "shaded" configuration, the dependency will be shaded into your output jar
+    // shaded 'mezz:jei:4.31.2' << will shade HadEnoughItems 4.31.2 directly into your jar
+    // For more configuration options: see the bottom of this file and: https://gradleup.com/shadow/configuration/
+
+    // Example - CurseMaven dependencies:
+    // 'curse.maven:had-enough-items-557549:4543375' << had-enough-items = project slug, 557549 = project id, 4543375 = file id
+    // Full documentation: https://cursemaven.com/
+
+    // Example - Modrinth dependencies:
+    // 'maven.modrinth:jei:4.16.1.1000' << jei = project name, 4.16.1.1000 = file version
+    // Full documentation: https://docs.modrinth.com/docs/tutorials/maven/
+
+    // Example - Local dependencies:
+    // 'libs:jei:4.31.2 << libs = folder name (/libs) in flatDir, jei:4.31.2 = file name (jei-4.31.2.jar)
+
+    // Common dependency types (configuration):
+    // implementation = dependency available at both compile time and runtime
+    // runtimeOnly = runtime dependency
+    // compileOnly = compile time dependency
+    // annotationProcessor = annotation processing dependencies
+    // contain = bundle dependency jars into final artifact, will extract them in mod loading. Can be used it as jar-in-jar
+    // shaded = bundle dependencies into shadow output artifact (relocation configurable in shadowJar task)
+    // modImplementation = mod dependency available at both compile time and runtime
+    // modCompileOnly = mod dependency available only at compile time
+    // modRuntimeOnly = mod dependency available only at runtime
+    // modApi / modCompileOnlyApi = like their non-mod counterparts, only created with the `java-library` plugin
+
+    // Transitive dependencies:
+    // (Dependencies that your dependency depends on)
+    // If you wish to exclude transitive dependencies in the described dependencies
+    // Use a closure as such:
+    // implementation ('com.google.code.gson:gson:2.8.6') {
+    //     transitive = false
+    // }
+
+    compileOnly 'org.jetbrains:annotations:26.1.0'
+
+    compileOnly 'CraftTweaker2:CraftTweaker2-MC1120-Main:1.12-4.1.20.711'
+    modCompileOnly 'curse.maven:cofh-core-69162:2920433'
+    modCompileOnly 'curse.maven:hwyla-253449:2568751'
+    modCompileOnly 'curse.maven:industrial-craft-242638:2746892'
+
+    modImplementation 'mezz:jei:4.35.1'
+    //modImplementation 'mezz.jei:jei_1.12.2:4.22.0.1036'
+
+    modImplementation 'curse.maven:the-one-probe-245211:2667280'
+    modCompileOnly('curse.maven:ender-core-ceu-1530852:8707400')
+    modCompileOnly('curse.maven:enderio-ceu-1530854:8707396')
+    modImplementation 'curse.maven:baubles-227083:2518667'
+    modCompileOnly 'curse.maven:codechicken-lib-1-8-242818:2779848'
+    modCompileOnly 'curse.maven:chisel-235279:2915375'
+    modCompileOnly 'curse.maven:inventory-tweaks-223094:2923460'
+
+    modImplementation 'curse.maven:inventory-bogosorter-632327:8231600'
+    modRuntimeOnly('com.cleanroommc:modularui:3.1.6') {
+        transitive = false
     }
+
+    modImplementation 'curse.maven:mouse-tweaks-unofficial-461660:5876158'
+    modCompileOnly 'curse.maven:ctm-267602:2915363'
+
+    modRuntimeOnly 'curse.maven:spark-361579:3542217'
+    modRuntimeOnly 'curse.maven:thaumcraft-223628:2629023'
+    modRuntimeOnly 'curse.maven:itemzoom-261725:2643616'
+    modRuntimeOnly 'curse.maven:key-binding-patch-928895:5951859'
 
     modRuntimeOnly 'curse.maven:fugue-1005815:8403977'
     modRuntimeOnly 'curse.maven:scalar-legacy-1235372:6842491'
     modRuntimeOnly 'org.scala-lang:scala-library:2.12.20'
     modRuntimeOnly 'org.scala-lang:scala-reflect:2.12.20'
-    
-    //cofhcore
-    modCompileOnly "curse.maven:CoFHCore-69162:2920433"
-    //crt
-    compileOnly 'CraftTweaker2:CraftTweaker2-MC1120-Main:1.12-4.1.20.711'
-    // Hwyla
-    modCompileOnly "curse.maven:Hwyla-253449:2568751"
-    // IndustrialCraft 2
-    modCompileOnly "curse.maven:industrial-craft-242638:2746892"
-    // JEI
-    modImplementation 'mezz:jei:4.35.1'
-    //modRuntimeOnly 'curse.maven:jei-238222:8964563'
-    // The One Probe
-    modImplementation "curse.maven:the-one-probe-245211:2667280"
-    //EIO
-    modCompileOnly("curse.maven:ender-core-ceu-1530852:8707400")
-    modCompileOnly("curse.maven:enderio-ceu-1530854:8707396")
-    // Baubles
-    modImplementation "curse.maven:baubles-227083:2518667"
-    // CodeChickenLib
-    modCompileOnly "curse.maven:codechicken-lib-1-8-242818:2779848"
-    // Chisel
-    modCompileOnly "curse.maven:chisel-235279:2915375"
-    // Inventory Tweaks
-    modCompileOnly "curse.maven:inventory-tweaks-223094:2923460"
-    // Inventory Bogo-Sorter
-    modImplementation "curse.maven:inventory-bogosorter-632327:8231600"
-    modRuntimeOnly("com.cleanroommc:modularui:3.1.6") {transitive = false}
-    modRuntimeOnly "curse.maven:key-binding-patch-928895:5951859"
-    // mouse tweaks
-    modImplementation "curse.maven:mouse-tweaks-unofficial-461660:5876158"
-    // Connected Textures Mod
-    modCompileOnly "curse.maven:ctm-267602:2915363"
+}
 
-    modRuntimeOnly("curse.maven:spark-361579:3542217")
-    modRuntimeOnly 'curse.maven:thaumcraft-223628:2629023'
-    modRuntimeOnly 'curse.maven:itemzoom-261725:2643616'
+if (propertyBool('enable_shadow')) {
+    tasks.named("shadowJar").configure {
+        // Exclude specific parts of deps to keep your jar clean
+        // dependencies {
+        //     exclude 'META-INF/maven/**'
+        // }
+
+        // Relocate specific parts of deps, so multiple shaded classes in mods will not conflict
+        // relocate "mezz.jei", "shaded.mezz.jei"
+
+        // Remove unused classes automatically. May cause issues if they are accessed by reflection
+        // minimize()
+    }
 }

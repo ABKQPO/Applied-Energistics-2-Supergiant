@@ -39,7 +39,7 @@ public final class HeiBookmarkItems {
      * The ingredient a HEI bookmark item wraps. Only meaningful when {@link #isBookmarkItem(Object)} said yes.
      */
     public static Object unwrapBookmark(Object ingredient) {
-        return ((AccessorBookmarkItem<?>) ingredient).i_getIngredient();
+        return ((AccessorBookmarkItem<?>) ingredient).ae2$getIngredient();
     }
 
     /**
@@ -47,7 +47,7 @@ public final class HeiBookmarkItems {
      * yes.
      */
     public static long bookmarkAmount(Object ingredient) {
-        return ((AccessorBookmarkItem<?>) ingredient).i_getAmount();
+        return ((AccessorBookmarkItem<?>) ingredient).ae2$getAmount();
     }
 
     /**
@@ -100,7 +100,7 @@ public final class HeiBookmarkItems {
 
         //noinspection DataFlowIssue
         AccessorBookmarkItem<?> bookmarkItem = (AccessorBookmarkItem<?>) new BookmarkItem<>(ingredient);
-        bookmarkItem.i_setAmount(Math.max(1, amount));
+        bookmarkItem.ae2$setAmount(Math.max(1, amount));
         return (BookmarkItem<?>) bookmarkItem;
     }
 }
