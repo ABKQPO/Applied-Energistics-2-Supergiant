@@ -22,74 +22,170 @@ import ae2.api.stacks.GenericStack;
 import ae2.text.TextComponents;
 import com.google.common.base.Preconditions;
 import io.netty.buffer.ByteBuf;
-import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.objects.Object2ObjectLinkedOpenHashMap;
+import it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap;
 import net.minecraft.network.PacketBuffer;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.text.ITextComponent;
 import org.jetbrains.annotations.Nullable;
 
-import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.Function;
+import java.util.function.BiFunction;
 
-public abstract class SynchronizedField<T> {
+/**
+ * Synchronizes one field of a container to its client.
+ *
+ * <p>The field is accessed through one {@link VarHandle}. This keeps access to
+ * primitive and reference fields in the same code path, while the concrete
+ * field implementations remain responsible for their wire representation.</p>
+ */
+public abstract class SynchronizedField {
     private static final int MAX_STRING_BYTES = 4096;
     private static final int MAX_CUSTOM_FIELD_BYTES = 1024 * 1024;
 
-    private final Object source;
-    private final MethodHandle getter;
-    private final MethodHandle setter;
-    private T clientVersion;
+    private static final Map<Class<?>, Factory> FACTORIES = new Reference2ObjectOpenHashMap<>();
 
-    private SynchronizedField(Object source, Field field) {
-        this.source = source;
+    static {
+        register(String.class, StringField::new);
+        register(int.class, IntegerField::new);
+        register(Integer.class, IntegerField::new);
+        register(long.class, LongField::new);
+        register(Long.class, LongField::new);
+        register(double.class, DoubleField::new);
+        register(Double.class, DoubleField::new);
+        register(boolean.class, BooleanField::new);
+        register(Boolean.class, BooleanField::new);
+        register(ITextComponent.class, TextComponentField::new);
+        register(GenericStack.class, GenericStackField::new);
+        register(ResourceLocation.class, ResourceLocationField::new);
+        register(PacketWritable.class, CustomField::new);
+        register(Enum.class, EnumField::new);
+    }
+
+    private final Object source;
+    private final VarHandle varHandle;
+    private Object clientVersion;
+
+    /**
+     * Creates a synchronized field backed by {@code varHandle}.
+     *
+     * <p>This constructor is protected so integrations can provide their own
+     * synchronized field implementation and register it with
+     * {@link #register(Class, BiFunction)}.</p>
+     */
+    protected SynchronizedField(Object source, VarHandle varHandle) {
+        this.source = Objects.requireNonNull(source, "source");
+        this.varHandle = Objects.requireNonNull(varHandle, "varHandle");
+    }
+
+    /**
+     * Registers a synchronized field factory for a field type.
+     *
+     * <p>Exact type registrations take precedence over assignable type
+     * registrations. This lets an integration register a specific subtype
+     * while the built-in {@link PacketWritable} and {@link Enum} registrations
+     * continue to cover their respective type families.</p>
+     *
+     * @param fieldType the type declared by a synchronized field
+     * @param factory   creates a field wrapper for the object and its VarHandle
+     * @throws IllegalArgumentException if the type already has a registration
+     */
+    public static synchronized void register(Class<?> fieldType,
+                                              BiFunction<Object, VarHandle, ? extends SynchronizedField> factory) {
+        Objects.requireNonNull(fieldType, "fieldType");
+        Objects.requireNonNull(factory, "factory");
+        Factory previous = FACTORIES.putIfAbsent(fieldType, factory::apply);
+        if (previous != null) {
+            throw new IllegalArgumentException("A synchronized field factory is already registered for " + fieldType);
+        }
+    }
+
+    /**
+     * Creates a wrapper for a reflected field using the registered factory for
+     * its declared type.
+     */
+    public static SynchronizedField create(Object source, Field field) {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(field, "field");
+
+        VarHandle varHandle = createVarHandle(field);
+        Factory factory = findFactory(field.getType());
+        if (factory == null) {
+            throw new IllegalArgumentException("Cannot synchronize field " + field);
+        }
+
+        return Objects.requireNonNull(factory.create(source, varHandle),
+                "synchronized field factory returned null");
+    }
+
+    private static VarHandle createVarHandle(Field field) {
         field.setAccessible(true);
         try {
-            this.getter = MethodHandles.lookup().unreflectGetter(field);
-            this.setter = MethodHandles.lookup().unreflectSetter(field);
+            var lookup = MethodHandles.privateLookupIn(field.getDeclaringClass(), MethodHandles.lookup());
+            return lookup.unreflectVarHandle(field);
         } catch (IllegalAccessException e) {
             throw new RuntimeException("Failed to access synchronized field " + field, e);
         }
     }
 
-    public static SynchronizedField<?> create(Object source, Field field) {
-        Class<?> fieldType = field.getType();
-
-        if (PacketWritable.class.isAssignableFrom(fieldType)) {
-            return new CustomField(source, field);
-        } else if (fieldType == String.class) {
-            return new StringField(source, field);
-        } else if (fieldType == int.class || fieldType == Integer.class) {
-            return new IntegerField(source, field);
-        } else if (fieldType == long.class || fieldType == Long.class) {
-            return new LongField(source, field);
-        } else if (fieldType == double.class || fieldType == Double.class) {
-            return new DoubleField(source, field);
-        } else if (fieldType == boolean.class || fieldType == Boolean.class) {
-            return new BooleanField(source, field);
-        } else if (fieldType == ITextComponent.class) {
-            return new TextComponentField(source, field);
-        } else if (fieldType == GenericStack.class) {
-            return new GenericStackField(source, field);
-        } else if (fieldType == ResourceLocation.class) {
-            return new ResourceLocationField(source, field);
-        } else if (fieldType.isEnum()) {
-            return createEnumField(source, field, fieldType);
+    private static synchronized @Nullable Factory findFactory(Class<?> fieldType) {
+        Factory exact = FACTORIES.get(fieldType);
+        if (exact != null) {
+            return exact;
         }
 
-        throw new IllegalArgumentException("Cannot synchronize field " + field);
+        for (var entry : FACTORIES.entrySet()) {
+            if (entry.getKey().isAssignableFrom(fieldType)) {
+                return entry.getValue();
+            }
+        }
+        return null;
     }
 
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private static SynchronizedField<?> createEnumField(Object source, Field field, Class<?> fieldType) {
-        Class<? extends Enum> enumType = fieldType.asSubclass(Enum.class);
-        return new EnumField(source, field, enumType.getEnumConstants());
+    /** Returns the current field value through the field's VarHandle. */
+    protected final Object get() {
+        try {
+            return this.varHandle.get(this.source);
+        } catch (Throwable throwable) {
+            throw new RuntimeException("Failed to read synchronized field", throwable);
+        }
     }
+
+    /** Sets the field value through the field's VarHandle. */
+    protected final void set(Object value) {
+        try {
+            this.varHandle.set(this.source, value);
+        } catch (Throwable throwable) {
+            throw new RuntimeException("Failed to write synchronized field", throwable);
+        }
+    }
+
+    public final boolean hasChanges() {
+        return !Objects.equals(get(), this.clientVersion);
+    }
+
+    public final void write(ByteBuf data) {
+        this.clientVersion = get();
+        writeValue(data);
+    }
+
+    public final void read(ByteBuf data) {
+        readValue(data);
+        this.clientVersion = get();
+    }
+
+    /** Writes the current value using this field's wire representation. */
+    protected abstract void writeValue(ByteBuf data);
+
+    /** Reads a value and stores it using {@link #set(Object)}. */
+    protected abstract void readValue(ByteBuf data);
 
     private static void writeString(ByteBuf data, String value) {
         byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
@@ -110,229 +206,213 @@ public abstract class SynchronizedField<T> {
         return new String(bytes, StandardCharsets.UTF_8);
     }
 
-    @SuppressWarnings("unchecked")
-    private T getCurrentValue() {
-        try {
-            return (T) this.getter.invoke(source);
-        } catch (Throwable throwable) {
-            throw new RuntimeException(throwable);
-        }
-    }
-
-    public boolean hasChanges() {
-        return !Objects.equals(getCurrentValue(), this.clientVersion);
-    }
-
-    public final void write(ByteBuf data) {
-        T currentValue = getCurrentValue();
-        this.clientVersion = currentValue;
-        this.writeValue(data, currentValue);
-    }
-
-    public final void read(ByteBuf data) {
-        T value = readValue(data);
-        try {
-            this.setter.invoke(source, value);
-            this.clientVersion = value;
-        } catch (Throwable throwable) {
-            throw new RuntimeException(throwable);
-        }
-    }
-
-    protected abstract void writeValue(ByteBuf data, T value);
-
-    @Nullable
-    protected abstract T readValue(ByteBuf data);
-
-    private static final class StringField extends SynchronizedField<String> {
-        private StringField(Object source, Field field) {
-            super(source, field);
+    private static final class StringField extends SynchronizedField {
+        private StringField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
         }
 
         @Override
-        protected void writeValue(ByteBuf data, String value) {
+        protected void writeValue(ByteBuf data) {
+            String value = (String) get();
             writeString(data, value == null ? "" : value);
         }
 
         @Override
-        protected String readValue(ByteBuf data) {
-            return readString(data);
+        protected void readValue(ByteBuf data) {
+            set(readString(data));
         }
     }
 
-    private static final class IntegerField extends SynchronizedField<Integer> {
-        private IntegerField(Object source, Field field) {
-            super(source, field);
+    private static final class IntegerField extends SynchronizedField {
+        private IntegerField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
         }
 
         @Override
-        protected void writeValue(ByteBuf data, Integer value) {
-            data.writeInt(value);
+        protected void writeValue(ByteBuf data) {
+            data.writeInt((Integer) get());
         }
 
         @Override
-        protected Integer readValue(ByteBuf data) {
-            return data.readInt();
+        protected void readValue(ByteBuf data) {
+            set(data.readInt());
         }
     }
 
-    private static final class LongField extends SynchronizedField<Long> {
-        private LongField(Object source, Field field) {
-            super(source, field);
+    private static final class LongField extends SynchronizedField {
+        private LongField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
         }
 
         @Override
-        protected void writeValue(ByteBuf data, Long value) {
-            data.writeLong(value);
+        protected void writeValue(ByteBuf data) {
+            data.writeLong((Long) get());
         }
 
         @Override
-        protected Long readValue(ByteBuf data) {
-            return data.readLong();
+        protected void readValue(ByteBuf data) {
+            set(data.readLong());
         }
     }
 
-    private static final class DoubleField extends SynchronizedField<Double> {
-        private DoubleField(Object source, Field field) {
-            super(source, field);
+    private static final class DoubleField extends SynchronizedField {
+        private DoubleField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
         }
 
         @Override
-        protected void writeValue(ByteBuf data, Double value) {
-            data.writeDouble(value);
+        protected void writeValue(ByteBuf data) {
+            data.writeDouble((Double) get());
         }
 
         @Override
-        protected Double readValue(ByteBuf data) {
-            return data.readDouble();
+        protected void readValue(ByteBuf data) {
+            set(data.readDouble());
         }
     }
 
-    private static final class BooleanField extends SynchronizedField<Boolean> {
-        private BooleanField(Object source, Field field) {
-            super(source, field);
+    private static final class BooleanField extends SynchronizedField {
+        private BooleanField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
         }
 
         @Override
-        protected void writeValue(ByteBuf data, Boolean value) {
-            data.writeBoolean(value);
+        protected void writeValue(ByteBuf data) {
+            data.writeBoolean((Boolean) get());
         }
 
         @Override
-        protected Boolean readValue(ByteBuf data) {
-            return data.readBoolean();
+        protected void readValue(ByteBuf data) {
+            set(data.readBoolean());
         }
     }
 
-    private static final class TextComponentField extends SynchronizedField<ITextComponent> {
-        private TextComponentField(Object source, Field field) {
-            super(source, field);
+    private static final class TextComponentField extends SynchronizedField {
+        private TextComponentField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
         }
 
         @Override
-        protected void writeValue(ByteBuf data, ITextComponent value) {
-            TextComponents.writeToPacket(new PacketBuffer(data), value);
+        protected void writeValue(ByteBuf data) {
+            TextComponents.writeToPacket(new PacketBuffer(data), (ITextComponent) get());
         }
 
         @Override
-        @Nullable
-        protected ITextComponent readValue(ByteBuf data) {
-            return TextComponents.readFromPacket(new PacketBuffer(data));
+        protected void readValue(ByteBuf data) {
+            set(TextComponents.readFromPacket(new PacketBuffer(data)));
         }
     }
 
-    private static final class GenericStackField extends SynchronizedField<GenericStack> {
-        private GenericStackField(Object source, Field field) {
-            super(source, field);
+    private static final class GenericStackField extends SynchronizedField {
+        private GenericStackField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
         }
 
         @Override
-        protected void writeValue(ByteBuf data, GenericStack value) {
-            GenericStack.writeBuffer(value, new PacketBuffer(data));
+        protected void writeValue(ByteBuf data) {
+            GenericStack.writeBuffer((GenericStack) get(), new PacketBuffer(data));
         }
 
         @Override
-        protected GenericStack readValue(ByteBuf data) {
-            return GenericStack.readBuffer(new PacketBuffer(data));
+        protected void readValue(ByteBuf data) {
+            set(GenericStack.readBuffer(new PacketBuffer(data)));
         }
     }
 
-    private static final class ResourceLocationField extends SynchronizedField<ResourceLocation> {
-        private ResourceLocationField(Object source, Field field) {
-            super(source, field);
+    private static final class ResourceLocationField extends SynchronizedField {
+        private ResourceLocationField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
         }
 
         @Override
-        protected void writeValue(ByteBuf data, ResourceLocation value) {
+        protected void writeValue(ByteBuf data) {
+            ResourceLocation value = (ResourceLocation) get();
             writeString(data, value == null ? "" : value.toString());
         }
 
         @Override
-        @Nullable
-        protected ResourceLocation readValue(ByteBuf data) {
+        protected void readValue(ByteBuf data) {
             String value = readString(data);
-            return value.isEmpty() ? null : new ResourceLocation(value);
+            set(value.isEmpty() ? null : new ResourceLocation(value));
         }
     }
 
-    private static final class EnumField<T extends Enum<T>> extends SynchronizedField<T> {
-        private final T[] values;
+    private static final class EnumField extends SynchronizedField {
+        private final Enum<?>[] values;
 
-        private EnumField(Object source, Field field, T[] values) {
-            super(source, field);
-            this.values = values;
+        private EnumField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
+            this.values = (Enum<?>[]) varHandle.varType().asSubclass(Enum.class).getEnumConstants();
         }
 
         @Override
-        protected void writeValue(ByteBuf data, T value) {
+        protected void writeValue(ByteBuf data) {
+            Enum<?> value = (Enum<?>) get();
             data.writeShort(value == null ? -1 : value.ordinal());
         }
 
         @Override
-        @Nullable
-        protected T readValue(ByteBuf data) {
+        protected void readValue(ByteBuf data) {
             short ordinal = data.readShort();
-            return ordinal >= 0 && ordinal < this.values.length ? this.values[ordinal] : null;
+            set(ordinal >= 0 && ordinal < this.values.length ? this.values[ordinal] : null);
         }
     }
 
-    private static final class CustomField extends SynchronizedField<Object> {
-        private static final Map<Class<?>, Function<ByteBuf, Object>> FACTORIES = new Object2ObjectOpenHashMap<>();
+    private static final class CustomField extends SynchronizedField {
+        private static final Map<Class<?>, Constructor<? extends PacketWritable>> CONSTRUCTORS =
+                new Object2ObjectLinkedOpenHashMap<>();
+
         private final Class<?> fieldType;
 
-        private CustomField(Object source, Field field) {
-            super(source, field);
-            this.fieldType = field.getType();
+        private CustomField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
+            this.fieldType = varHandle.varType();
             Preconditions.checkArgument(PacketWritable.class.isAssignableFrom(this.fieldType));
         }
 
-        private static Function<ByteBuf, Object> getFactory(Class<?> clazz) {
+        @SuppressWarnings("unchecked")
+        private static synchronized Constructor<? extends PacketWritable> getConstructor(Class<?> clazz) {
+            Constructor<? extends PacketWritable> constructor = CONSTRUCTORS.get(clazz);
+            if (constructor != null) {
+                return constructor;
+            }
+
             try {
-                var constructor = clazz.getConstructor(ByteBuf.class);
-                return buffer -> {
-                    try {
-                        return constructor.newInstance(buffer);
-                    } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
-                        throw new RuntimeException("Failed to deserialize " + clazz, e);
-                    }
-                };
+                constructor = (Constructor<? extends PacketWritable>) clazz.getConstructor(ByteBuf.class);
+                CONSTRUCTORS.put(clazz, constructor);
+                return constructor;
             } catch (NoSuchMethodException e) {
                 throw new RuntimeException("No constructor taking ByteBuf on " + clazz, e);
             }
         }
 
         @Override
-        protected void writeValue(ByteBuf data, Object value) {
-            ((PacketWritable) value).writeToPacket(data);
+        protected void writeValue(ByteBuf data) {
+            ((PacketWritable) get()).writeToPacket(data);
         }
 
         @Override
-        protected Object readValue(ByteBuf data) {
+        protected void readValue(ByteBuf data) {
             int before = data.readableBytes();
             if (before > MAX_CUSTOM_FIELD_BYTES) {
                 throw new IllegalArgumentException("Custom synchronized field payload is too large: " + before);
             }
-            return FACTORIES.computeIfAbsent(this.fieldType, CustomField::getFactory).apply(data);
+
+            try {
+                set(getConstructor(this.fieldType).newInstance(data));
+            } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
+                throw new RuntimeException("Failed to deserialize " + this.fieldType, e);
+            }
+        }
+    }
+
+    @FunctionalInterface
+    public interface Factory extends BiFunction<Object, VarHandle, SynchronizedField> {
+        SynchronizedField create(Object source, VarHandle varHandle);
+
+        @Override
+        default SynchronizedField apply(Object source, VarHandle varHandle) {
+            return create(source, varHandle);
         }
     }
 }

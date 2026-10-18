@@ -28,7 +28,7 @@ import org.jetbrains.annotations.Nullable;
 import java.lang.reflect.Field;
 
 public class DataSynchronization {
-    private final Short2ObjectOpenHashMap<SynchronizedField<?>> fields = new Short2ObjectOpenHashMap<>();
+    private final Short2ObjectOpenHashMap<SynchronizedField> fields = new Short2ObjectOpenHashMap<>();
 
     public DataSynchronization(Object host) {
         collectFields(host, host.getClass());
@@ -63,7 +63,7 @@ public class DataSynchronization {
     }
 
     public boolean hasChanges() {
-        for (SynchronizedField<?> value : this.fields.values()) {
+        for (SynchronizedField value : this.fields.values()) {
             if (value.hasChanges()) {
                 return true;
             }
@@ -80,7 +80,7 @@ public class DataSynchronization {
     }
 
     private void writeFields(ByteBuf data, boolean includeUnchanged) {
-        for (Short2ObjectMap.Entry<SynchronizedField<?>> entry : this.fields.short2ObjectEntrySet()) {
+        for (Short2ObjectMap.Entry<SynchronizedField> entry : this.fields.short2ObjectEntrySet()) {
             if (includeUnchanged || entry.getValue().hasChanges()) {
                 data.writeShort(entry.getShortKey());
                 entry.getValue().write(data);
@@ -97,7 +97,7 @@ public class DataSynchronization {
 
     public void readUpdate(ByteBuf data, ShortSet updatedFields) {
         for (short key = data.readShort(); key != -1; key = data.readShort()) {
-            SynchronizedField<?> field = this.fields.get(key);
+            SynchronizedField field = this.fields.get(key);
             if (field == null) {
                 throw new IllegalArgumentException("Server sent unknown GUI field " + key);
             }
