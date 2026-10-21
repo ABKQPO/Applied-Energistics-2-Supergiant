@@ -949,7 +949,7 @@ public abstract class AEBaseGui<T extends AEBaseContainer> extends GuiContainer 
         renderHoveredSlotOverlayIfNeeded(slot);
     }
 
-    private static void restoreStateForVanillaItemRender() {
+    protected static void restoreStateForVanillaItemRender() {
         GlStateManager.colorMask(true, true, true, true);
         GlStateManager.enableTexture2D();
         GlStateManager.enableDepth();
