@@ -3,7 +3,6 @@ package ae2.client.render.overlay;
 import ae2.api.util.FlowSearchDTO;
 import ae2.client.gui.me.common.FlowRateFormatter;
 import ae2.core.localization.PlayerMessages;
-import ae2.crafting.execution.CraftingSupplierLocator;
 import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import net.minecraft.client.Minecraft;
@@ -17,7 +16,6 @@ import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import org.lwjgl.opengl.GL11;
 
 import java.util.List;
-import java.util.Map;
 
 public class IngredientFlowHighlightHandler {
 
@@ -35,7 +33,7 @@ public class IngredientFlowHighlightHandler {
     private static final float HIGHLIGHT_ALPHA = 0.95F;
 
     private final ObjectArrayList<OverlayHighlightLocation> currentDimensionLocations = new ObjectArrayList<>();
-    private final Map<OverlayHighlightLocation, Long> highlightedNetTotals = new Object2LongOpenHashMap<>();
+    private final Object2LongOpenHashMap<OverlayHighlightLocation> highlightedNetTotals = new Object2LongOpenHashMap<>();
     private long expiresAt;
     private int highlightedDimension = Integer.MIN_VALUE;
 
@@ -43,6 +41,7 @@ public class IngredientFlowHighlightHandler {
     }
 
     public void showFlowLocations(Minecraft minecraft, List<FlowSearchDTO> flows, ITextComponent ingredientName) {
+        clear();
         if (minecraft.player == null || minecraft.world == null) {
             return;
         }
@@ -54,25 +53,21 @@ public class IngredientFlowHighlightHandler {
         }
 
         List<OverlayHighlightLocation> locations = new ObjectArrayList<>(flows.size());
-        this.highlightedNetTotals.clear();
         int currentDimension = minecraft.world.provider.getDimension();
 
         for (FlowSearchDTO flow : flows) {
-            BlockPos pos = flow.location.getPos();
-            int dimension = flow.location.getLevel().provider.getDimension();
+            if (flow.dimension != currentDimension) {
+                continue;
+            }
+            BlockPos pos = flow.position;
             ITextComponent rate = FlowRateFormatter.formatTotalForChat(flow.netTotal());
 
-            if (dimension == currentDimension) {
-                OverlayHighlightLocation location =
-                    new OverlayHighlightLocation(dimension, pos, null, OverlayHighlightShape.WHOLE_BLOCK);
-                locations.add(location);
-                this.highlightedNetTotals.put(location, flow.netTotal());
-                sendFlowMessage(minecraft, PlayerMessages.IngredientFlowHighlighted.text(
-                    ingredientName, rate, pos.getX(), pos.getY(), pos.getZ()));
-            } else {
-                sendFlowMessage(minecraft, PlayerMessages.IngredientFlowInOtherDim.text(
-                    ingredientName, rate, CraftingSupplierLocator.getDimensionName(dimension)));
-            }
+            OverlayHighlightLocation location =
+                new OverlayHighlightLocation(currentDimension, pos, null, OverlayHighlightShape.WHOLE_BLOCK);
+            locations.add(location);
+            this.highlightedNetTotals.put(location, flow.netTotal());
+            sendFlowMessage(minecraft, PlayerMessages.IngredientFlowHighlighted.text(
+                ingredientName, rate, pos.getX(), pos.getY(), pos.getZ()));
         }
 
         showLocations(minecraft, locations);
@@ -102,13 +97,14 @@ public class IngredientFlowHighlightHandler {
 
     public void clear() {
         this.currentDimensionLocations.clear();
+        this.highlightedNetTotals.clear();
     }
 
     @SubscribeEvent
     public void renderWorldLast(RenderWorldLastEvent event) {
         Minecraft minecraft = Minecraft.getMinecraft();
         if (minecraft.world == null || minecraft.player == null) {
-            this.currentDimensionLocations.clear();
+            clear();
             return;
         }
         if (this.currentDimensionLocations.isEmpty()) {
@@ -116,7 +112,7 @@ public class IngredientFlowHighlightHandler {
         }
         if (minecraft.world.provider.getDimension() != this.highlightedDimension
             || System.currentTimeMillis() > this.expiresAt) {
-            this.currentDimensionLocations.clear();
+            clear();
             return;
         }
         if (((System.currentTimeMillis() / 300L) & 1L) == 1L) {

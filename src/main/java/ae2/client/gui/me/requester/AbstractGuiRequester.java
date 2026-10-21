@@ -2,10 +2,7 @@ package ae2.client.gui.me.requester;
 
 import ae2.api.behaviors.ContainerItemStrategies;
 import ae2.api.behaviors.EmptyingAction;
-import ae2.api.stacks.AmountFormat;
-import ae2.api.stacks.GenericStack;
 import ae2.client.gui.AEBaseGui;
-import ae2.client.gui.me.common.StackSizeRenderer;
 import ae2.client.gui.style.Blitter;
 import ae2.client.gui.style.GuiStyle;
 import ae2.client.gui.widgets.ITextFieldGui;
@@ -23,8 +20,6 @@ import ae2.tile.crafting.requester.RequestList;
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import net.minecraft.client.gui.GuiTextField;
-import net.minecraft.client.renderer.GlStateManager;
-import net.minecraft.client.renderer.RenderHelper;
 import net.minecraft.entity.player.InventoryPlayer;
 import net.minecraft.inventory.ClickType;
 import net.minecraft.inventory.Slot;
@@ -32,6 +27,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.text.ITextComponent;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.lwjgl.input.Keyboard;
 
@@ -67,6 +63,8 @@ public abstract class AbstractGuiRequester<C extends AbstractContainerRequester>
     private final ResourceLocation texture;
     private final ObjectArrayList<RequestRowWidget> requestWidgets = new ObjectArrayList<>();
 
+    private boolean listRefreshPending;
+    private long acceptedSyncGeneration;
     protected boolean refreshList;
     protected int rowAmount = MIN_ROW_COUNT;
 
@@ -96,9 +94,30 @@ public abstract class AbstractGuiRequester<C extends AbstractContainerRequester>
     }
 
     @Override
+    public final boolean acceptSyncIdentity(int windowId, long sourceGeneration) {
+        if (windowId != this.container.windowId || sourceGeneration <= 0
+            || sourceGeneration < this.acceptedSyncGeneration) {
+            return false;
+        }
+        if (sourceGeneration != this.acceptedSyncGeneration) {
+            this.acceptedSyncGeneration = sourceGeneration;
+            clearData();
+            scheduleListRefresh();
+        }
+        return true;
+    }
+
+    @Override
     public final void postClearAll() {
         clearData();
-        refreshList();
+        scheduleListRefresh();
+    }
+
+    @Override
+    public final void postRemoveRequester(long requesterId) {
+        if (removeRequester(requesterId)) {
+            scheduleListRefresh();
+        }
     }
 
     @Override
@@ -110,7 +129,7 @@ public abstract class AbstractGuiRequester<C extends AbstractContainerRequester>
             readRequest(requester, i, rows.get(i));
         }
         afterFullUpdate(requesterId, requesterName, sortValue, requestCount);
-        refreshList();
+        scheduleListRefresh();
     }
 
     @Override
@@ -126,7 +145,7 @@ public abstract class AbstractGuiRequester<C extends AbstractContainerRequester>
             }
         }
         afterIncrementalUpdate(requesterId);
-        refreshList();
+        scheduleListRefresh();
     }
 
     @Override
@@ -153,6 +172,10 @@ public abstract class AbstractGuiRequester<C extends AbstractContainerRequester>
     @Override
     protected void updateBeforeRender() {
         super.updateBeforeRender();
+        if (this.listRefreshPending) {
+            this.listRefreshPending = false;
+            refreshList();
+        }
         updateVisibleRows();
     }
 
@@ -201,9 +224,7 @@ public abstract class AbstractGuiRequester<C extends AbstractContainerRequester>
             }
 
             Object lineElement = this.lines.get(scrollLevel + i);
-            if (lineElement instanceof Request request) {
-                requestWidgets.get(i).setRequester(request);
-            } else if (lineElement instanceof String text) {
+            if (lineElement instanceof String text) {
                 int rows = getByName(text).size();
                 if (rows > 1) {
                     text = String.format("%s (%s)", text, rows);
@@ -217,37 +238,6 @@ public abstract class AbstractGuiRequester<C extends AbstractContainerRequester>
         for (RequestRowWidget row : this.requestWidgets) {
             row.drawPreview(offsetX, offsetY);
         }
-    }
-
-    @Override
-    protected void drawSlot(Slot slot) {
-        if (!(slot instanceof RequestSlot appEngSlot)) {
-            super.drawSlot(slot);
-            return;
-        }
-
-        if (appEngSlot.getRawStack().isEmpty()) {
-            super.drawSlot(slot);
-            return;
-        }
-
-        ItemStack stack = appEngSlot.getDisplayStack();
-        if (stack.isEmpty()) {
-            return;
-        }
-
-        RenderHelper.enableGUIStandardItemLighting();
-        GlStateManager.enableDepth();
-        this.itemRender.renderItemAndEffectIntoGUI(this.mc.player, stack, slot.xPos, slot.yPos);
-        this.itemRender.renderItemOverlayIntoGUI(this.fontRenderer, stack, slot.xPos, slot.yPos, "");
-
-        GenericStack genericStack = GenericStack.unwrapItemStack(appEngSlot.getRawStack());
-        if (genericStack != null && genericStack.amount() > 1) {
-            String amount = genericStack.what().formatAmount(genericStack.amount(), AmountFormat.SLOT);
-            StackSizeRenderer.renderSizeLabel(this.fontRenderer, slot.xPos, slot.yPos, amount, false);
-        }
-
-        renderHoveredSlotOverlayIfNeeded(slot);
     }
 
     @Override
@@ -291,7 +281,7 @@ public abstract class AbstractGuiRequester<C extends AbstractContainerRequester>
     }
 
     @Override
-    protected void handleMouseClick(@Nullable Slot slot, int slotId, int mouseButton, ClickType clickType) {
+    protected void handleMouseClick(@Nullable Slot slot, int slotId, int mouseButton, @NotNull ClickType clickType) {
         if (!(slot instanceof RequestSlot requestSlot)) {
             super.handleMouseClick(slot, slotId, mouseButton, clickType);
             return;
@@ -361,7 +351,7 @@ public abstract class AbstractGuiRequester<C extends AbstractContainerRequester>
                                    int requestCount) {
     }
 
-    protected void afterIncrementalUpdate(@SuppressWarnings("unused") long requesterId) {
+    protected void afterIncrementalUpdate(long requesterId) {
     }
 
     protected void clearData() {
@@ -376,7 +366,13 @@ public abstract class AbstractGuiRequester<C extends AbstractContainerRequester>
 
     protected abstract @Nullable ClientRequester findById(long requesterId);
 
+    protected abstract boolean removeRequester(long requesterId);
+
     protected abstract Rectangle getFooterBounds();
+
+    private void scheduleListRefresh() {
+        this.listRefreshPending = true;
+    }
 
     private void updateVisibleRows() {
         int scrollLevel = this.scrollbar.getCurrentScroll();

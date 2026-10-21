@@ -21,10 +21,10 @@ import ae2.api.AECapabilities;
 import ae2.api.config.Actionable;
 import ae2.api.config.PowerMultiplier;
 import ae2.api.config.PowerUnit;
+import ae2.api.features.ChargeableItems;
 import ae2.api.implementations.blockentities.ICrankable;
 import ae2.api.implementations.items.IAEItemPowerStorage;
 import ae2.api.implementations.items.IChargeableItemAdapter;
-import ae2.api.features.ChargeableItems;
 import ae2.api.inventories.InternalInventory;
 import ae2.api.networking.IGridNode;
 import ae2.api.networking.ticking.IGridTickable;
@@ -44,8 +44,9 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.network.PacketBuffer;
 import net.minecraft.util.EnumFacing;
 import net.minecraftforge.common.capabilities.Capability;
-
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+
 import java.io.IOException;
 import java.util.EnumSet;
 
@@ -147,19 +148,25 @@ public class TileCharger extends AENetworkedPoweredTile implements IGridTickable
                 double chargeRate = powerStorage != null
                     ? powerStorage.getChargeRate(stack) : adapter.getChargeRate(stack);
                 if (Double.isFinite(currentPower) && Double.isFinite(maxPower) && Double.isFinite(chargeRate)
-                    && currentPower >= 0.0D && maxPower > currentPower && chargeRate > 0.0D) {
-                    chargeRate *= ticksSinceLastCall;
-                    double extractedAmount = this.extractAEPower(chargeRate, Actionable.MODULATE,
+                    && currentPower >= 0.0D && maxPower > currentPower && chargeRate > 0.0D
+                    && ticksSinceLastCall > 0) {
+                    double missingCharge = maxPower - currentPower;
+                    double requestedAmount = chargeRate >= missingCharge / ticksSinceLastCall
+                        ? missingCharge : chargeRate * ticksSinceLastCall;
+                    if (!Double.isFinite(requestedAmount) || requestedAmount <= 0.0D) {
+                        return;
+                    }
+                    double extractedAmount = this.extractAEPower(requestedAmount, Actionable.MODULATE,
                         PowerMultiplier.CONFIG);
 
-                    double missingChargeRate = chargeRate - extractedAmount;
-                    double missingAEPower = maxPower - currentPower;
-                    double toExtract = Math.min(missingChargeRate, missingAEPower);
+                    extractedAmount = Math.clamp(extractedAmount, 0.0D, requestedAmount);
+                    double missingAEPower = requestedAmount - extractedAmount;
 
                     var grid = this.getMainNode().getGrid();
-                    if (grid != null && toExtract > 0.0D) {
-                        extractedAmount += grid.getEnergyService().extractAEPower(toExtract, Actionable.MODULATE,
-                            PowerMultiplier.ONE);
+                    if (grid != null && missingAEPower > 0.0D) {
+                        double networkExtracted = grid.getEnergyService().extractAEPower(missingAEPower,
+                            Actionable.MODULATE, PowerMultiplier.ONE);
+                        extractedAmount += Math.clamp(networkExtracted, 0.0D, missingAEPower);
                     }
 
                     if (extractedAmount > 0.0D) {
@@ -229,7 +236,7 @@ public class TileCharger extends AENetworkedPoweredTile implements IGridTickable
     }
 
     @Override
-    public boolean hasCapability(Capability<?> capability, @Nullable EnumFacing facing) {
+    public boolean hasCapability(@NotNull Capability<?> capability, @Nullable EnumFacing facing) {
         if (capability == AECapabilities.CRANKABLE && getCrankable(facing) != null) {
             return true;
         }
@@ -238,7 +245,7 @@ public class TileCharger extends AENetworkedPoweredTile implements IGridTickable
 
     @SuppressWarnings("unchecked")
     @Override
-    public <T> T getCapability(Capability<T> capability, @Nullable EnumFacing facing) {
+    public <T> T getCapability(@NotNull Capability<T> capability, @Nullable EnumFacing facing) {
         if (capability == AECapabilities.CRANKABLE) {
             return (T) getCrankable(facing);
         }

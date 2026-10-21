@@ -25,7 +25,6 @@ import ae2.api.config.SortDir;
 import ae2.api.config.SortOrder;
 import ae2.api.config.ViewItems;
 import ae2.api.config.YesNo;
-import ae2.api.crafting.PatternDetailsHelper;
 import ae2.api.implementations.blockentities.IViewCellStorage;
 import ae2.api.inventories.InternalInventory;
 import ae2.api.networking.IGrid;
@@ -46,7 +45,6 @@ import ae2.api.storage.MEStorageChangeListener;
 import ae2.api.storage.MEStorageMonitor;
 import ae2.api.storage.StorageHelper;
 import ae2.api.storage.cells.IBasicCellItem;
-import ae2.api.util.FlowRate;
 import ae2.api.util.IConfigManager;
 import ae2.api.util.IConfigurableObject;
 import ae2.api.util.KeyTypeSelection;
@@ -80,7 +78,9 @@ import ae2.me.helpers.ActionHostEnergySource;
 import ae2.me.service.IngredientFlowService;
 import com.google.common.base.Preconditions;
 import com.google.common.primitives.Ints;
+import it.unimi.dsi.fastutil.longs.LongLongPair;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
+import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import it.unimi.dsi.fastutil.objects.ObjectSets;
@@ -92,6 +92,7 @@ import net.minecraft.init.Items;
 import net.minecraft.inventory.Slot;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.crafting.Ingredient;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Collections;
@@ -185,6 +186,11 @@ public class ContainerMEStorage extends AEBaseContainer
     public boolean flowTrackingActive = false;
     private int flowRateSyncCounter = 0;
     private boolean lastFlowRatesEmpty = true;
+    @Nullable
+    private IGrid lastFlowGrid;
+    private long flowSourceGeneration;
+    private long lastFlowPacketGeneration = Long.MIN_VALUE;
+    private long flowSnapshotId;
 
     @Nullable
     private AEKey clientRequestedTargetItem;
@@ -509,7 +515,7 @@ public class ContainerMEStorage extends AEBaseContainer
     }
 
     public void setRecursiveIngredientReserveAmount(long amount) {
-        long clampedAmount = Math.clamp(amount, 0, PatternDetailsHelper.MAX_PROCESSING_PATTERN_AMOUNT);
+        long clampedAmount = Math.max(amount, 0);
         this.recursiveIngredientReserveAmount = clampedAmount;
         if (isServerSide()) {
             this.lastSentRecursiveIngredientReserveAmount = clampedAmount;
@@ -964,7 +970,7 @@ public class ContainerMEStorage extends AEBaseContainer
     }
 
     @Override
-    public void onContainerClosed(EntityPlayer player) {
+    public void onContainerClosed(@NotNull EntityPlayer player) {
         this.containerClosed = true;
         if (isServerSide()) {
             unbindGridStorageMonitor();
@@ -1017,7 +1023,11 @@ public class ContainerMEStorage extends AEBaseContainer
             }
         }
 
-        this.flowTrackingActive = active;
+        if (this.flowTrackingActive != active) {
+            this.flowSourceGeneration++;
+            this.lastFlowPacketGeneration = Long.MIN_VALUE;
+            this.flowTrackingActive = active;
+        }
 
         if (!active && this.serverCM.getSetting(Settings.VIEW_MODE) == ViewItems.FLOWING) {
             this.serverCM.putSetting(Settings.VIEW_MODE, ViewItems.ALL);
@@ -1025,7 +1035,17 @@ public class ContainerMEStorage extends AEBaseContainer
     }
 
     private void updateFlowRates() {
-        if (!AEConfig.instance().isIngredientFlowTrackingEnabled() || this.getGridNode() == null) {
+        IGridNode node = this.getGridNode();
+        IGrid grid = node == null ? null : node.grid();
+        if (grid != this.lastFlowGrid) {
+            this.lastFlowGrid = grid;
+            this.flowSourceGeneration++;
+            this.lastFlowPacketGeneration = Long.MIN_VALUE;
+            clearFlowRatesOnClient();
+        }
+
+        if (!AEConfig.instance().isIngredientFlowTrackingEnabled() || !this.flowTrackingActive || grid == null) {
+            clearFlowRatesOnClient();
             return;
         }
 
@@ -1035,21 +1055,61 @@ public class ContainerMEStorage extends AEBaseContainer
 
         this.flowRateSyncCounter = 0;
 
-        final IGrid grid = this.getGridNode().grid();
-        if (grid == null) {
+        final IngredientFlowService flowService = grid.getService(IngredientFlowService.class);
+        if (flowService == null) {
+            clearFlowRatesOnClient();
             return;
         }
-
-        final IngredientFlowService flowService = grid.getService(IngredientFlowService.class);
-        final Map<AEKey, FlowRate> rates = flowService.getAllRecentFlow();
-        if (rates.isEmpty() && this.lastFlowRatesEmpty) {
+        final Map<AEKey, LongLongPair> rates = flowService.getAllRecentFlow();
+        if (rates.isEmpty() && this.lastFlowRatesEmpty
+            && this.lastFlowPacketGeneration == this.flowSourceGeneration) {
             return;
         }
         this.lastFlowRatesEmpty = rates.isEmpty();
+        this.lastFlowPacketGeneration = this.flowSourceGeneration;
+        sendFlowRates(rates);
+    }
 
-        final FlowRatesPacket packet = new FlowRatesPacket(rates);
+    private void clearFlowRatesOnClient() {
+        if (this.lastFlowRatesEmpty && this.lastFlowPacketGeneration == this.flowSourceGeneration) {
+            return;
+        }
+
+        this.lastFlowRatesEmpty = true;
+        this.flowRateSyncCounter = 0;
+        this.lastFlowPacketGeneration = this.flowSourceGeneration;
+        sendFlowRates(Map.of());
+    }
+
+    private void sendFlowRates(Map<AEKey, LongLongPair> rates) {
         if (this.getPlayer() instanceof EntityPlayerMP player) {
-            InitNetwork.CHANNEL.sendTo(packet, player);
+            long snapshotId = ++this.flowSnapshotId;
+            if (rates.size() > FlowRatesPacket.MAX_RATES * FlowRatesPacket.MAX_PAGES) {
+                InitNetwork.CHANNEL.sendTo(new FlowRatesPacket(this.windowId, this.flowSourceGeneration,
+                    this.flowTrackingActive, snapshotId, 0, 0, false, Map.of()), player);
+                return;
+            }
+
+            int pageCount = Math.max(1, (rates.size() + FlowRatesPacket.MAX_RATES - 1)
+                / FlowRatesPacket.MAX_RATES);
+            if (pageCount == 1) {
+                InitNetwork.CHANNEL.sendTo(new FlowRatesPacket(this.windowId, this.flowSourceGeneration,
+                    this.flowTrackingActive, snapshotId, 0, 1, true, rates), player);
+                return;
+            }
+
+            var entries = rates.entrySet().iterator();
+            for (int pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+                int pageSize = Math.min(FlowRatesPacket.MAX_RATES,
+                    rates.size() - pageIndex * FlowRatesPacket.MAX_RATES);
+                Map<AEKey, LongLongPair> page = new Object2ObjectOpenHashMap<>(pageSize);
+                for (int i = 0; i < pageSize; i++) {
+                    var entry = entries.next();
+                    page.put(entry.getKey(), entry.getValue());
+                }
+                InitNetwork.CHANNEL.sendTo(new FlowRatesPacket(this.windowId, this.flowSourceGeneration,
+                    this.flowTrackingActive, snapshotId, pageIndex, pageCount, true, page), player);
+            }
         }
     }
 

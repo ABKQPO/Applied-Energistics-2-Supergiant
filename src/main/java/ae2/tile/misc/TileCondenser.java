@@ -45,7 +45,7 @@ import net.minecraftforge.fluids.capability.FluidTankProperties;
 import net.minecraftforge.fluids.capability.IFluidHandler;
 import net.minecraftforge.fluids.capability.IFluidTankProperties;
 import net.minecraftforge.items.IItemHandler;
-
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 public class TileCondenser extends AEBaseInvTile implements IConfigurableObject, CondenserLogicHost {
@@ -55,7 +55,7 @@ public class TileCondenser extends AEBaseInvTile implements IConfigurableObject,
     private static final IFluidTankProperties[] TANKS = {
         new FluidTankProperties(null, Fluid.BUCKET_VOLUME, true, false)
     };
-    private final AppEngInternalInventory outputSlot = new AppEngInternalInventory(this, 1);
+    private final OutputInventory outputSlot = new OutputInventory();
     private final AppEngInternalInventory storageSlot = new AppEngInternalInventory(this, 1);
     private final InternalInventory inputSlot = new CondenseItemHandler();
     private final IFluidHandler fluidHandler = new FluidHandler();
@@ -69,6 +69,7 @@ public class TileCondenser extends AEBaseInvTile implements IConfigurableObject,
     private final InternalInventory combinedInv = new CombinedInternalInventory(this.inputSlot, this.outputSlot,
         this.storageSlot);
     private double storedPower;
+    private long conversionBatchId;
     public TileCondenser() {
         this.cm.registerSetting(Settings.CONDENSER_OUTPUT, CondenserOutput.TRASH);
     }
@@ -95,7 +96,8 @@ public class TileCondenser extends AEBaseInvTile implements IConfigurableObject,
         final ItemStack stack = this.storageSlot.getStackInSlot(0);
         if (!stack.isEmpty() && stack.getItem() instanceof IStorageComponent storageComponent) {
             if (storageComponent.isStorageComponent(stack)) {
-                return storageComponent.getBytes(stack) * BYTE_MULTIPLIER;
+                double bytes = storageComponent.getBytes(stack);
+                return bytes > 0 ? bytes * BYTE_MULTIPLIER : 0;
             }
         }
         return 0;
@@ -126,7 +128,8 @@ public class TileCondenser extends AEBaseInvTile implements IConfigurableObject,
 
     @Override
     public void setStoredCondenserPower(double storedPower) {
-        this.setStoredPower(storedPower);
+        // CondenserLogic saves once the whole conversion has committed.
+        this.storedPower = storedPower;
     }
 
     @Override
@@ -141,11 +144,35 @@ public class TileCondenser extends AEBaseInvTile implements IConfigurableObject,
     }
 
     @Override
-    public void addCondenserOutput(AEItemKey output, long amount) {
-        int count = (int) Math.min(amount, output.getMaxStackSize());
-        if (count > 0) {
-            this.outputSlot.insertItem(0, output.toStack(count), false);
+    public final OutputCommit commitCondenserOutput(AEItemKey output, long amount, double powerPerOutput) {
+        long batchId = Math.incrementExact(conversionBatchId);
+        conversionBatchId = batchId;
+        CondenserOutput currentMode = cm.getSetting(Settings.CONDENSER_OUTPUT);
+        if (powerPerOutput != currentMode.requiredPower || !output.equals(CondenserLogic.getOutputKey(currentMode))
+            || outputSlot.committing || amount <= 0 || !Double.isFinite(powerPerOutput) || powerPerOutput <= 0
+            || !Double.isFinite(storedPower) || storedPower < powerPerOutput) {
+            return new OutputCommit(output, this, outputSlot, batchId, 0, Math.max(0, amount), 0);
         }
+        int count = (int) Math.min(Math.min(amount, output.getMaxStackSize()), storedPower / powerPerOutput);
+        if (count <= 0) {
+            return new OutputCommit(output, this, outputSlot, batchId, 0, amount, 0);
+        }
+        ItemStack offered = output.toStack(count);
+        outputSlot.committing = true;
+        try {
+            // This private native inventory invokes no host callback until the receipt and debit are complete.
+            ItemStack remaining = outputSlot.insertItem(0, offered, false);
+            int accepted = count - remaining.getCount();
+            storedPower = Math.max(0, storedPower - accepted * powerPerOutput);
+            return new OutputCommit(output, this, outputSlot, batchId, accepted, amount - accepted, 0);
+        } finally {
+            outputSlot.committing = false;
+        }
+    }
+
+    @Override
+    public void notifyCondenserOutput(AEItemKey output, long amount) {
+        outputSlot.publishChange();
     }
 
     @Override
@@ -194,8 +221,27 @@ public class TileCondenser extends AEBaseInvTile implements IConfigurableObject,
     }
 
     private void setStoredPower(double storedPower) {
-        this.storedPower = storedPower;
+        this.storedPower = Double.isFinite(storedPower) && storedPower >= 0 ? storedPower : 0;
         this.markDirty();
+    }
+
+    private final class OutputInventory extends AppEngInternalInventory {
+        private boolean committing;
+
+        private OutputInventory() {
+            super(TileCondenser.this, 1);
+        }
+
+        @Override
+        protected void onContentsChanged(int slot) {
+            if (!committing) {
+                super.onContentsChanged(slot);
+            }
+        }
+
+        private void publishChange() {
+            super.onContentsChanged(0);
+        }
     }
 
     public IFluidHandler getFluidHandler() {
@@ -207,7 +253,7 @@ public class TileCondenser extends AEBaseInvTile implements IConfigurableObject,
     }
 
     @Override
-    public boolean hasCapability(Capability<?> capability, @Nullable EnumFacing facing) {
+    public boolean hasCapability(@NotNull Capability<?> capability, @Nullable EnumFacing facing) {
         if (capability == AECapabilities.ME_STORAGE) {
             return true;
         }
@@ -219,7 +265,7 @@ public class TileCondenser extends AEBaseInvTile implements IConfigurableObject,
 
     @SuppressWarnings("unchecked")
     @Override
-    public <T> T getCapability(Capability<T> capability, @Nullable EnumFacing facing) {
+    public <T> T getCapability(@NotNull Capability<T> capability, @Nullable EnumFacing facing) {
         if (capability == AECapabilities.ME_STORAGE) {
             return (T) this.getMEStorage();
         }

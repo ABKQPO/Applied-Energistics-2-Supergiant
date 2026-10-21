@@ -122,7 +122,8 @@ mcpForge {
     runs {
         configureEach {
             programArguments.addAll('--username', propertyString('minecraft_username'))
-            systemProperty('crl.dev.mixin', 'ae2.default.mixins.json,ae2.mod.mixins.json')
+            systemProperty('net.minecraftforge.gradle.GradleStart.srg.srg-mcp',
+                layout.buildDirectory.file('moddev/artifacts/intermediateToNamed.srg').get().asFile.absolutePath)
             systemProperty('mixin.debug.export', 'true')
             def extraArgs = propertyString('extra_jvm_args')
             if (extraArgs != null && !extraArgs.trim().isEmpty()) {
@@ -154,6 +155,16 @@ mcpForge {
     }
 }
 
+tasks.named('runClient') {
+    dependsOn 'syncDevResourcesToClasses'
+    dependsOn 'syncDevClassesToResources'
+}
+
+tasks.named('runServer') {
+    dependsOn 'syncDevResourcesToClasses'
+    dependsOn 'syncDevClassesToResources'
+}
+
 if (propertyBool('enable_shadow')) {
     def reobfShadowJar = obfuscation.reobfuscate(tasks.named('shadowJar'), sourceSets.main)
     reobfTaskName = reobfShadowJar.name
@@ -180,7 +191,7 @@ if (useMixins) {
 dependencies {
     if (useMixins) {
         annotationProcessor 'com.cleanroommc:mixinextras-common:0.5.5'
-        annotationProcessor 'com.cleanroommc:cleanmix:0.7.2'
+        annotationProcessor "com.cleanroommc:cleanmix:${propertyString('cleanmix_version')}"
     }
     if (propertyBool('use_lombok_ap')) {
         compileOnly "org.projectlombok:lombok:${propertyString('lombok_version')}"
@@ -272,6 +283,18 @@ configurations.named('testCompileOnly').configure {
 }
 configurations.named('testRuntimeOnly').configure {
     extendsFrom(configurations.runtimeOnly)
+}
+
+// Cleanroom's mapped classes use newer libraries than the vanilla runtime metadata declares.
+// Resolve the test runtime against the same library versions used to compile those classes.
+configurations.named('testRuntimeClasspath').configure {
+    shouldResolveConsistentlyWith(configurations.compileClasspath)
+}
+
+dependencies {
+    if (propertyBool('enable_lwjglx')) {
+        testRuntimeOnly 'com.cleanroommc:lwjglx:1.0.0'
+    }
 }
 
 if (!propertyBool('enable_shadow')) {
@@ -400,6 +423,13 @@ test {
     javaLauncher.set(javaToolchains.launcherFor {
         languageVersion = JavaLanguageVersion.of(25)
     })
+    // Compile-only mod APIs are required when tests load classes that implement
+    // optional integrations. Keep them scoped to the test process; they are not
+    // runtime dependencies of the produced mod.
+    classpath += sourceSets.main.compileClasspath.filter {
+        def name = it.name.toLowerCase(Locale.ROOT)
+        name.contains('cofh') || name.contains('enderio') || name.contains('ender-core')
+    }
     if (propertyBool('show_testing_output')) {
         testLogging {
             showStandardStreams = true

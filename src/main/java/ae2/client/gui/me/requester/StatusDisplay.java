@@ -10,7 +10,7 @@ import net.minecraft.util.text.ITextComponent;
 import net.minecraft.util.text.Style;
 import net.minecraft.util.text.TextComponentString;
 import net.minecraft.util.text.TextFormatting;
-import org.jspecify.annotations.NonNull;
+import org.jetbrains.annotations.NotNull;
 
 import java.awt.Rectangle;
 import java.util.ArrayList;
@@ -44,15 +44,11 @@ public final class StatusDisplay implements ITooltip {
         tooltip.add(new TextComponentString(" "));
     }
 
-    private static ITextComponent statusText(RequestStatus status) {
-        return GuiText.requesterStatus(status).text().setStyle(new Style().setColor(statusFormatting(status)));
-    }
-
     private static TextFormatting statusFormatting(RequestStatus status) {
         return switch (status) {
             case IDLE, REQUESTING, PLANNING -> TextFormatting.DARK_GREEN;
             case MISSING, NO_PATTERN -> TextFormatting.RED;
-            case CPU -> TextFormatting.GOLD;
+            case CPU, UNCONFIRMED -> TextFormatting.GOLD;
             case CRAFTING -> TextFormatting.YELLOW;
             case EXPORTING -> TextFormatting.DARK_PURPLE;
         };
@@ -88,7 +84,7 @@ public final class StatusDisplay implements ITooltip {
     }
 
     private int getStatusColor() {
-        if (this.isInactive.getAsBoolean()) {
+        if (this.status != RequestStatus.UNCONFIRMED && this.isInactive.getAsBoolean()) {
             return opaque(AEColor.GRAY.mediumVariant);
         }
 
@@ -99,7 +95,7 @@ public final class StatusDisplay implements ITooltip {
         return switch (requestStatus) {
             case IDLE, REQUESTING, PLANNING -> AEColor.GREEN.mediumVariant;
             case MISSING, NO_PATTERN -> AEColor.RED.mediumVariant;
-            case CPU -> AEColor.YELLOW.blackVariant;
+            case CPU, UNCONFIRMED -> AEColor.YELLOW.blackVariant;
             case CRAFTING -> AEColor.YELLOW.mediumVariant;
             case EXPORTING -> AEColor.PURPLE.blackVariant;
         };
@@ -110,7 +106,7 @@ public final class StatusDisplay implements ITooltip {
     }
 
     @Override
-    public @NonNull List<ITextComponent> getTooltipMessage() {
+    public @NotNull List<ITextComponent> getTooltipMessage() {
         boolean showAllStatuses = GuiScreen.isShiftKeyDown();
         List<ITextComponent> tooltip = new ArrayList<>(showAllStatuses ? 20 : 4);
         tooltip.add(GuiText.RequesterStatus.text());
@@ -122,9 +118,9 @@ public final class StatusDisplay implements ITooltip {
             addStatusTooltipLine(tooltip, RequestStatus.CPU);
             addStatusTooltipLine(tooltip, RequestStatus.CRAFTING);
             addStatusTooltipLine(tooltip, RequestStatus.EXPORTING);
+            addStatusTooltipLine(tooltip, RequestStatus.UNCONFIRMED);
         } else {
-            tooltip.add(statusText(getVisibleStatus()));
-            tooltip.add(new TextComponentString(" "));
+            addStatusTooltipLine(tooltip, getVisibleStatus());
             tooltip.add(GuiText.RequesterStatusShift.text().setStyle(
                 new Style().setColor(TextFormatting.GRAY)));
         }
@@ -132,7 +128,8 @@ public final class StatusDisplay implements ITooltip {
     }
 
     private RequestStatus getVisibleStatus() {
-        return this.isInactive.getAsBoolean() ? RequestStatus.IDLE : this.status;
+        return this.status != RequestStatus.UNCONFIRMED && this.isInactive.getAsBoolean()
+            ? RequestStatus.IDLE : this.status;
     }
 
     @Override

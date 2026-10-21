@@ -32,9 +32,10 @@ import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 import ae2.api.storage.MEStorage;
 import ae2.api.storage.StorageHelper;
+import ae2.container.ContainerConstants;
+import ae2.container.crafting.LastCraftingRecipeTracker;
 import ae2.container.interfaces.ICraftingGridContainer;
 import ae2.container.me.items.ContainerCraftingTerm;
-import ae2.container.crafting.LastCraftingRecipeTracker;
 import ae2.helpers.InventoryAction;
 import ae2.items.storage.ViewCellItem;
 import ae2.util.Platform;
@@ -45,7 +46,6 @@ import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.init.Items;
-import net.minecraft.inventory.Container;
 import net.minecraft.inventory.InventoryCrafting;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.crafting.CraftingManager;
@@ -55,6 +55,7 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
 import net.minecraftforge.common.ForgeHooks;
 import net.minecraftforge.fml.common.FMLCommonHandler;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
 
@@ -65,12 +66,6 @@ import java.util.List;
 public class CraftingTermSlot extends AppEngCraftingSlot {
     private static final int GRID_SIZE = 9;
 
-    private static final Container DUMMY_CONTAINER = new Container() {
-        @Override
-        public boolean canInteractWith(EntityPlayer playerIn) {
-            return false;
-        }
-    };
 
     private final InternalInventory craftInv;
     private final InternalInventory pattern;
@@ -92,7 +87,7 @@ public class CraftingTermSlot extends AppEngCraftingSlot {
     }
 
     private static InventoryCrafting createRecipeInput(List<ItemStack> stacks) {
-        InventoryCrafting recipeInput = new InventoryCrafting(DUMMY_CONTAINER, 3, 3);
+        InventoryCrafting recipeInput = new InventoryCrafting(ContainerConstants.EMPTY_CONTAINER, 3, 3);
         for (int slot = 0; slot < stacks.size(); slot++) {
             recipeInput.setInventorySlotContents(slot, stacks.get(slot));
         }
@@ -140,7 +135,7 @@ public class CraftingTermSlot extends AppEngCraftingSlot {
     }
 
     @Override
-    public ItemStack onTake(EntityPlayer player, ItemStack stack) {
+    public @NotNull ItemStack onTake(@NotNull EntityPlayer player, @NotNull ItemStack stack) {
         return stack;
     }
 
@@ -221,7 +216,7 @@ public class CraftingTermSlot extends AppEngCraftingSlot {
         // Refills are best-effort: a missing network refill must not cancel the craft itself.
         addRefills(ctx, false);
         return new CraftPlan(ctx.crafted, ctx.templateInputs, ctx.operations, ctx.refills, ctx.networkRequests,
-            ctx.gridConsumes);
+            ctx.requiredNetworkRequests, ctx.gridConsumes);
     }
 
     private CraftPlan planBatchCraft(EntityPlayer player, int maxTimesToCraft) {
@@ -244,7 +239,7 @@ public class CraftingTermSlot extends AppEngCraftingSlot {
 
         addRefills(ctx, true);
         return new CraftPlan(ctx.crafted, ctx.templateInputs, ctx.operations, ctx.refills, ctx.networkRequests,
-            ctx.gridConsumes);
+            ctx.requiredNetworkRequests, ctx.gridConsumes);
     }
 
     private PlanContext createPlanContext(EntityPlayer player) {
@@ -376,13 +371,13 @@ public class CraftingTermSlot extends AppEngCraftingSlot {
             return exactUse;
         }
 
-        return tryUseFuzzyNetworkItem(ctx, slot, template, recipeInputs, true);
+        return tryUseFuzzyNetworkItem(ctx, slot, template, recipeInputs, true, true);
     }
 
     private SlotUse tryUseNetworkFluid(PlanContext ctx, int slot, ItemStack template,
                                        FluidContainerInput fluidInput) {
         if (canExtract(ctx, fluidInput.fluid(), fluidInput.amount())) {
-            addNetworkRequest(ctx, fluidInput.fluid(), fluidInput.amount());
+            addNetworkRequest(ctx, fluidInput.fluid(), fluidInput.amount(), true);
             return new SlotUse(slot, CraftSource.NETWORK_FLUID_CONTENT, template.copy(), fluidInput.fluid(),
                 fluidInput.amount(), false, true);
         }
@@ -395,12 +390,12 @@ public class CraftingTermSlot extends AppEngCraftingSlot {
             return null;
         }
 
-        addNetworkRequest(ctx, key, 1);
+        addNetworkRequest(ctx, key, 1, true);
         return new SlotUse(slot, source, template.copy(), key, 1, false, false);
     }
 
     private SlotUse tryUseFuzzyNetworkItem(PlanContext ctx, int slot, ItemStack template,
-                                           List<ItemStack> recipeInputs, boolean validateOutput) {
+                                       List<ItemStack> recipeInputs, boolean validateOutput, boolean required) {
         AEItemKey requested = AEItemKey.of(template);
         if (requested == null || !shouldCheckFuzzy(template)) {
             return null;
@@ -427,7 +422,7 @@ public class CraftingTermSlot extends AppEngCraftingSlot {
                 }
             }
 
-            addNetworkRequest(ctx, itemKey, 1);
+            addNetworkRequest(ctx, itemKey, 1, required);
             return new SlotUse(slot, CraftSource.NETWORK_FUZZY_ITEM, candidate, itemKey, 1, false, false);
         }
         return null;
@@ -452,6 +447,7 @@ public class CraftingTermSlot extends AppEngCraftingSlot {
             }
             if (use.networkKey() != null && use.networkAmount() > 0) {
                 ctx.networkRequests.addTo(use.networkKey(), -use.networkAmount());
+                ctx.requiredNetworkRequests.addTo(use.networkKey(), -use.networkAmount());
             }
         }
     }
@@ -465,12 +461,13 @@ public class CraftingTermSlot extends AppEngCraftingSlot {
 
             AEItemKey exact = AEItemKey.of(template);
             if (exact != null && isAllowedByFilter(ctx.filter, exact) && canExtract(ctx, exact, 1)) {
-                addNetworkRequest(ctx, exact, 1);
+                addNetworkRequest(ctx, exact, 1, false);
                 ctx.refills.add(new Refill(slot, exact));
                 continue;
             }
 
-            SlotUse fuzzyRefill = tryUseFuzzyNetworkItem(ctx, slot, template, ctx.templateInputs, validateFuzzy);
+            SlotUse fuzzyRefill = tryUseFuzzyNetworkItem(ctx, slot, template, ctx.templateInputs, validateFuzzy,
+                false);
             if (fuzzyRefill != null && fuzzyRefill.networkKey() instanceof AEItemKey refillKey) {
                 ctx.refills.add(new Refill(slot, refillKey));
             }
@@ -538,27 +535,61 @@ public class CraftingTermSlot extends AppEngCraftingSlot {
             Actionable.SIMULATE) >= total;
     }
 
-    private void addNetworkRequest(PlanContext ctx, AEKey key, long amount) {
+    private void addNetworkRequest(PlanContext ctx, AEKey key, long amount, boolean required) {
         ctx.networkRequests.addTo(key, amount);
+        if (required) {
+            ctx.requiredNetworkRequests.addTo(key, amount);
+        }
     }
 
     private void executePlan(EntityPlayer player, InternalInventory target, CraftPlan plan, ItemStack output) {
-        for (Object2LongMap.Entry<AEKey> entry : plan.networkRequests.object2LongEntrySet()) {
+        var escrow = new AEKey2LongMap.OpenHashMap();
+        for (Object2LongMap.Entry<AEKey> entry : plan.requiredNetworkRequests.object2LongEntrySet()) {
             long amount = entry.getLongValue();
             if (amount <= 0) {
                 continue;
             }
             long extracted = StorageHelper.poweredExtraction(this.energySource, this.storage, entry.getKey(), amount,
                 this.actionSource, Actionable.MODULATE);
+            if (extracted < 0 || extracted > amount) {
+                refundEscrow(player, escrow);
+                return;
+            }
             if (extracted < amount) {
+                if (extracted > 0) {
+                    escrow.addTo(entry.getKey(), extracted);
+                }
+                refundEscrow(player, escrow);
+                return;
+            }
+            escrow.addTo(entry.getKey(), extracted);
+        }
+
+        for (int slot = 0; slot < plan.gridConsumes.length; slot++) {
+            int amount = plan.gridConsumes[slot];
+            if (amount <= 0) {
+                continue;
+            }
+            ItemStack expected = plan.eventInputs.get(slot);
+            ItemStack current = this.craftInv.getStackInSlot(slot);
+            if (!matchesPlannedInput(current, expected, amount)) {
+                refundEscrow(player, escrow);
                 return;
             }
         }
 
         for (int slot = 0; slot < plan.gridConsumes.length; slot++) {
             int amount = plan.gridConsumes[slot];
-            if (amount > 0) {
-                this.craftInv.extractItem(slot, amount, false);
+            if (amount <= 0) {
+                continue;
+            }
+            ItemStack extracted = this.craftInv.extractItem(slot, amount, false);
+            if (!matchesPlannedInput(extracted, plan.eventInputs.get(slot), amount)) {
+                if (!extracted.isEmpty()) {
+                    restoreCraftingInput(player, slot, extracted);
+                }
+                refundEscrow(player, escrow);
+                return;
             }
         }
 
@@ -576,6 +607,39 @@ public class CraftingTermSlot extends AppEngCraftingSlot {
 
         if (getContainer() != null) {
             getContainer().onCraftMatrixChanged(this.craftInv.toContainer());
+        }
+    }
+
+    private static boolean matchesPlannedInput(ItemStack actual, ItemStack expected, int amount) {
+        return !actual.isEmpty() && actual.getCount() == amount
+            && ItemStack.areItemsEqual(actual, expected)
+            && ItemStack.areItemStackTagsEqual(actual, expected);
+    }
+
+    private void refundEscrow(EntityPlayer player, AEKey2LongMap escrow) {
+        for (Object2LongMap.Entry<AEKey> entry : escrow.object2LongEntrySet()) {
+            long amount = entry.getLongValue();
+            if (amount <= 0) {
+                continue;
+            }
+            long inserted = StorageHelper.poweredInsert(this.energySource, this.storage, entry.getKey(), amount,
+                this.actionSource);
+            long remaining = Math.max(0, amount - Math.clamp(amount, 0, inserted));
+            if (remaining > 0) {
+                var drops = new ObjectArrayList<ItemStack>();
+                entry.getKey().addDrops(remaining, drops, player.world, player.getPosition());
+                if (!drops.isEmpty()) {
+                    Platform.spawnDrops(player.world, player.getPosition(), drops);
+                }
+            }
+        }
+        escrow.clear();
+    }
+
+    private void restoreCraftingInput(EntityPlayer player, int slot, ItemStack extracted) {
+        ItemStack remaining = this.craftInv.getSlotInv(slot).addItems(extracted);
+        if (!remaining.isEmpty()) {
+            Platform.spawnDrops(player.world, player.getPosition(), List.of(remaining));
         }
     }
 
@@ -621,7 +685,11 @@ public class CraftingTermSlot extends AppEngCraftingSlot {
             if (!this.craftInv.getStackInSlot(refill.slot()).isEmpty()) {
                 continue;
             }
-            this.craftInv.setItemDirect(refill.slot(), refill.key().toStack());
+            long extracted = StorageHelper.poweredExtraction(this.energySource, this.storage, refill.key(), 1,
+                this.actionSource, Actionable.MODULATE);
+            if (extracted == 1) {
+                this.craftInv.setItemDirect(refill.slot(), refill.key().toStack());
+            }
         }
     }
 
@@ -656,7 +724,7 @@ public class CraftingTermSlot extends AppEngCraftingSlot {
 
     private record CraftPlan(ItemStack crafted, List<ItemStack> eventInputs, List<CraftOperation> operations,
                              List<Refill> refills, AEKey2LongMap networkRequests,
-                             int[] gridConsumes) {
+                             AEKey2LongMap requiredNetworkRequests, int[] gridConsumes) {
         int times() {
             return operations.size();
         }
@@ -676,6 +744,7 @@ public class CraftingTermSlot extends AppEngCraftingSlot {
         final int[] gridRemaining = new int[GRID_SIZE];
         final int[] gridConsumes = new int[GRID_SIZE];
         final AEKey2LongMap networkRequests = new AEKey2LongMap.OpenHashMap();
+        final AEKey2LongMap requiredNetworkRequests = new AEKey2LongMap.OpenHashMap();
         final List<CraftOperation> operations = new ObjectArrayList<>();
         final List<Refill> refills = new ObjectArrayList<>();
         KeyCounter availableStacks;
