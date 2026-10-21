@@ -366,6 +366,8 @@ jar {
     dependsOn(syncDevResourcesToClasses)
     dependsOn(syncDevClassesToResources)
     archiveClassifier = 'dev'
+    // Keep the named development jar alongside the production jar for release uploads.
+    destinationDirectory = layout.buildDirectory.dir('libs')
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     if (configurations.contain.size() > 0) {
         into('/') {
@@ -404,6 +406,8 @@ shadowJar {
 
 
 tasks.named(reobfTaskName).configure {
+    // MDG inherits the input classifier; the remapped jar is the main runtime artifact.
+    archiveClassifier = ''
     doFirst {
         logging.captureStandardOutput LogLevel.INFO
     }
