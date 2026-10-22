@@ -19,17 +19,19 @@
 package ae2.core;
 
 import ae2.api.parts.CableRenderMode;
+import ae2.client.ActionKey;
+import ae2.client.ActionKeys;
 import ae2.client.ClientTickHandler;
 import ae2.client.EffectType;
 import ae2.client.Hotkeys;
 import ae2.client.NetworkAmount;
-import ae2.client.ActionKey;
-import ae2.client.ActionKeys;
 import ae2.client.PatternView;
 import ae2.client.commands.ClientCommands;
 import ae2.client.gui.AEBaseGui;
 import ae2.client.gui.Icon;
 import ae2.client.gui.PatternContainerExternalGuiReturnHandler;
+import ae2.client.gui.RecipeTransferPendingClientState;
+import ae2.client.gui.RecipeTransferPendingRenderer;
 import ae2.client.gui.StackTooltipRenderer;
 import ae2.client.gui.me.common.GuiMEStorage;
 import ae2.client.gui.me.common.PendingCraftingJobs;
@@ -179,6 +181,7 @@ public final class AppEngClient extends AppEngServer {
         MinecraftForge.EVENT_BUS.register(PriorityTunerHighlightHandler.INSTANCE);
         MinecraftForge.EVENT_BUS.register(StackTooltipRenderer.INSTANCE);
         MinecraftForge.EVENT_BUS.register(PatternContainerExternalGuiReturnHandler.INSTANCE);
+        MinecraftForge.EVENT_BUS.register(RecipeTransferPendingRenderer.INSTANCE);
         MinecraftForge.EVENT_BUS.register(NetworkRender.INSTANCE);
         MinecraftForge.EVENT_BUS.register(ProfileRender.INSTANCE);
         MinecraftForge.EVENT_BUS.register(BeamFormerBloom.INSTANCE);
@@ -301,12 +304,14 @@ public final class AppEngClient extends AppEngServer {
         World level = event.getWorld();
         if (level != null && level.isRemote) {
             CompassManager.INSTANCE.clear();
+            RecipeTransferPendingClientState.clearSession();
         }
     }
 
     @SubscribeEvent
     public void guiOpen(GuiOpenEvent event) {
         NetworkAmount.clear();
+        RecipeTransferPendingClientState.clearSession();
     }
 
     @SubscribeEvent
@@ -464,6 +469,7 @@ public final class AppEngClient extends AppEngServer {
         AdvancedMemoryCardHighlightHandler.INSTANCE.clear();
         PriorityTunerHighlightHandler.INSTANCE.clear();
         PendingCraftingJobs.clearPendingJobs();
+        RecipeTransferPendingClientState.clearSession();
         PinnedKeys.clearPinnedKeys();
         NetworkAmount.clear();
         Integrations.hei().clearIngredientSortRanks();

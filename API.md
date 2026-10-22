@@ -1075,3 +1075,27 @@ private ICrankable getCrankable(EnumFacing side) {
     return null;
 }
 ```
+
+## Recipe transfer integration
+
+`ae2.api.integrations.recipetransfer` exposes the optional customization points for AE's common JEI/HEI transfer
+pipeline. A target does not need to implement an AE container interface. `IRecipeTransferCustomization` can replace the
+server source, read-only availability view, quantity policy, target input protocol, and recipe ID, and receives a
+`RecipeTransferReceipt` after normal input has been applied. These API types contain no JEI/HEI layout or client GUI
+classes. Template/configuration handlers should keep using their existing write protocol and should not create a
+material source or a crafting request.
+
+JEI/HEI's standard `IRecipeTransferInfo` registrations are adapted at the transfer boundary. The client sends only the
+window id, mapped container slot numbers, actual per-slot recipe amounts, and item candidates; the server resolves the
+current source and validates the open window, carried stack, target slot contents, and capacity again. Material is
+inserted through the target container's normal `PICKUP` operation, so a configuration or ghost slot that accepts a
+copy without consuming the offered item leaves the source material in custody and does not deduct it a second time.
+Holding Ctrl presents the missing-material calculation in an overlay in the target GUI. Confirming it starts the
+selected or automatic CPU job; cancelling clears only the pending delivery and keeps already inserted items. The same
+normal input operation is retried as materials become available, and the client receives translucent, non-interactive placeholders. A new transfer, changed window, rejected
+slot, or closed target invalidates the old request. Explicit custom handlers and template handlers remain responsible
+for their own protocols. When a usable AE network exposes a craftable missing item, the server starts one waiting craft
+calculation for that missing amount; the resulting output is delivered through the same finite request.
+
+Targets that need an additional server-side source, recipe identity, quantity policy, or input protocol can register a
+factory with `RecipeTransferCustomizationRegistry`; ordinary containers need no registration.

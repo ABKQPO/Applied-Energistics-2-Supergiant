@@ -37,6 +37,9 @@ public interface HeiAdapter {
     default void clearIngredientSortRanks() {
     }
 
+    default void refreshRecipeTransferLayouts() {
+    }
+
     default void registerClientFeatures() {
     }
 

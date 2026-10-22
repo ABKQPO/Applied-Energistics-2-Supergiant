@@ -834,6 +834,7 @@ class RequesterCalculationCancellationTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     void cancellationBetweenDoneCheckAndGetReturnsIdle() {
         var tile = new TestTile();
         var future = (Future<ICraftingPlan>) Proxy.newProxyInstance(Future.class.getClassLoader(),
@@ -1243,6 +1244,7 @@ class RequesterCalculationCancellationTest {
         private boolean failSave;
 
         @Override
+        @SuppressWarnings("unchecked")
         protected IManagedGridNode createMainNode() {
             // Use the production listener, with a controllable managed node for Grid identity changes.
             var realNode = super.createMainNode();

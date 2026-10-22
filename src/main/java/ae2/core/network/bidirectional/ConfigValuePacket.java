@@ -3,19 +3,16 @@ package ae2.core.network.bidirectional;
 import ae2.api.config.Setting;
 import ae2.api.util.IConfigManager;
 import ae2.api.util.IConfigurableObject;
+import ae2.core.network.ClientboundPacket;
 import ae2.core.network.NetworkPacketHelper;
 import io.netty.buffer.ByteBuf;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.PacketBuffer;
 import net.minecraftforge.fml.common.network.ByteBufUtils;
-import net.minecraftforge.fml.common.network.simpleimpl.IMessage;
-import net.minecraftforge.fml.common.network.simpleimpl.IMessageHandler;
-import net.minecraftforge.fml.common.network.simpleimpl.MessageContext;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
-import org.jetbrains.annotations.Nullable;
 
-public class ConfigValuePacket implements IMessage {
+public class ConfigValuePacket extends ClientboundPacket {
     private static final int MAX_SETTING_NAME_LENGTH = 64;
     private static final int MAX_SETTING_VALUE_LENGTH = 64;
 
@@ -43,7 +40,7 @@ public class ConfigValuePacket implements IMessage {
     }
 
     @Override
-    public void fromBytes(ByteBuf buf) {
+    protected void read(ByteBuf buf) {
         try {
             PacketBuffer packetBuffer = new PacketBuffer(buf);
             this.name = packetBuffer.readString(MAX_SETTING_NAME_LENGTH);
@@ -56,7 +53,7 @@ public class ConfigValuePacket implements IMessage {
     }
 
     @Override
-    public void toBytes(ByteBuf buf) {
+    protected void write(ByteBuf buf) {
         ByteBufUtils.writeUTF8String(buf, this.name);
         ByteBufUtils.writeUTF8String(buf, this.value);
     }
@@ -81,15 +78,4 @@ public class ConfigValuePacket implements IMessage {
         }
     }
 
-    public static final class ClientHandler implements IMessageHandler<ConfigValuePacket, IMessage> {
-        @Override
-        public @Nullable IMessage onMessage(ConfigValuePacket message, MessageContext ctx) {
-            if (message.invalid) {
-                return null;
-            }
-            Minecraft minecraft = Minecraft.getMinecraft();
-            minecraft.addScheduledTask(() -> message.handleClient(minecraft));
-            return null;
-        }
-    }
 }

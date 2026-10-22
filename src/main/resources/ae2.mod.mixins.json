@@ -18,6 +18,7 @@
     "hei.MixinInputHandlerFocus",
     "hei.MixinLeftAreaDispatcher",
     "hei.MixinRecipeLayout",
+    "hei.MixinRecipeTransferRegistry",
     "hei.MixinRecipesGui"
   ],
   "mixins": [

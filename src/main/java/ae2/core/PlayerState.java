@@ -1,6 +1,7 @@
 package ae2.core;
 
 import ae2.container.PendingGridFills;
+import ae2.integration.modules.itemlists.transfer.PendingRecipeTransferManager;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.entity.player.PlayerEvent;
@@ -62,6 +63,10 @@ public final class PlayerState {
 
     @SubscribeEvent
     public void onPlayerClone(PlayerEvent.Clone event) {
+        PendingRecipeTransferManager.INSTANCE.clear(event.getOriginal());
+        PendingRecipeTransferManager.INSTANCE.clear(event.getEntityPlayer());
+        PendingRecipeTransferManager.INSTANCE.clearTransferNonce(event.getOriginal());
+        PendingRecipeTransferManager.INSTANCE.clearTransferNonce(event.getEntityPlayer());
         PendingGridFills.playerLeft(event.getOriginal());
         PendingGridFills.playerJoined(event.getEntityPlayer());
         setHoldingCtrl(event.getEntityPlayer(), isHoldingCtrl(event.getOriginal()));
@@ -70,18 +75,24 @@ public final class PlayerState {
 
     @SubscribeEvent
     public void onPlayerRespawn(PlayerRespawnEvent event) {
+        PendingRecipeTransferManager.INSTANCE.clear(event.player);
+        PendingRecipeTransferManager.INSTANCE.clearTransferNonce(event.player);
         PendingGridFills.playerJoined(event.player);
         clear(event.player);
     }
 
     @SubscribeEvent
     public void onPlayerChangedDimension(PlayerChangedDimensionEvent event) {
+        PendingRecipeTransferManager.INSTANCE.clear(event.player);
+        PendingRecipeTransferManager.INSTANCE.clearTransferNonce(event.player);
         PendingGridFills.playerJoined(event.player);
         clear(event.player);
     }
 
     @SubscribeEvent
     public void onPlayerLoggedOut(PlayerLoggedOutEvent event) {
+        PendingRecipeTransferManager.INSTANCE.clear(event.player);
+        PendingRecipeTransferManager.INSTANCE.clearTransferNonce(event.player);
         clear(event.player);
         // A player who left is not in a crafting terminal anymore, so the slots a batch order wanted to fill are
         // dropped rather than filled the next time that player opens the terminal.

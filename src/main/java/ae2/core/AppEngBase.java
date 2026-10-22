@@ -49,6 +49,7 @@ import ae2.init.internal.InitUpgrades;
 import ae2.init.worldgen.InitBiomes;
 import ae2.init.worldgen.InitDimensionTypes;
 import ae2.integration.Integrations;
+import ae2.integration.modules.itemlists.transfer.PendingRecipeTransferManager;
 import ae2.items.tools.NetworkAnalyserItem;
 import ae2.me.ticker.RequestBox;
 import ae2.me.tracker.PlayerTracker;
@@ -132,6 +133,7 @@ public final class AppEngBase implements AppEng {
     @Mod.EventHandler
     public void serverAboutToStart(FMLServerAboutToStartEvent event) {
         PendingGridFills.startSession();
+        PendingRecipeTransferManager.INSTANCE.clearAll();
         ChunkLoadingService.getInstance().onServerAboutToStart();
     }
 
@@ -146,12 +148,14 @@ public final class AppEngBase implements AppEng {
     @Mod.EventHandler
     public void serverStopping(FMLServerStoppingEvent event) {
         PendingGridFills.shutdown();
+        PendingRecipeTransferManager.INSTANCE.clearAll();
         ChunkLoadingService.getInstance().onServerStopping();
     }
 
     @Mod.EventHandler
     public void serverStopped(FMLServerStoppedEvent event) {
         PendingGridFills.shutdown();
+        PendingRecipeTransferManager.INSTANCE.clearAll();
         RequestBox.clear();
         PlayerTracker.clear();
         NetworkAnalyserItem.clearCache();
@@ -188,6 +192,7 @@ public final class AppEngBase implements AppEng {
         MinecraftForge.EVENT_BUS.register(new WirelessTerminalEventHandler());
         MinecraftForge.EVENT_BUS.register(RequestBox.class);
         MinecraftForge.EVENT_BUS.register(PlayerTracker.class);
+        MinecraftForge.EVENT_BUS.register(PendingRecipeTransferManager.INSTANCE);
         TickHandler.instance().init();
         AppEngRegistries.init();
         InitGridServices.init();

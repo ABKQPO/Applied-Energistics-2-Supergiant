@@ -16,12 +16,18 @@ public class NetworkAmountResultPacket extends ClientboundPacket {
 
     private AEKey key;
     private long amount;
+    private boolean craftable;
 
     public NetworkAmountResultPacket() {}
 
     public NetworkAmountResultPacket(AEKey what, long amount) {
+        this(what, amount, false);
+    }
+
+    public NetworkAmountResultPacket(AEKey what, long amount, boolean craftable) {
         this.key = what;
         this.amount = amount;
+        this.craftable = craftable;
     }
 
     @Override
@@ -29,6 +35,7 @@ public class NetworkAmountResultPacket extends ClientboundPacket {
         PacketBuffer packetBuffer = new PacketBuffer(buf);
         this.key = AEKey.readKey(packetBuffer);
         this.amount = packetBuffer.readLong();
+        this.craftable = packetBuffer.readBoolean();
     }
 
     @Override
@@ -36,6 +43,7 @@ public class NetworkAmountResultPacket extends ClientboundPacket {
         PacketBuffer packetBuffer = new PacketBuffer(buf);
         AEKey.writeKey(packetBuffer, this.key);
         packetBuffer.writeLong(this.amount);
+        packetBuffer.writeBoolean(this.craftable);
     }
 
     @Override
@@ -44,6 +52,6 @@ public class NetworkAmountResultPacket extends ClientboundPacket {
             return;
         }
 
-        NetworkAmount.acceptAmountResult(this.key, this.amount);
+        NetworkAmount.acceptAmountResult(this.key, this.amount, this.craftable);
     }
 }

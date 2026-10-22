@@ -133,6 +133,8 @@ public class ContainerCraftConfirm extends AEBaseContainer implements ISubGui {
     private Object calculationGeneration = new Object();
     private boolean submitting;
     @Nullable
+    private Runnable recipeTransferCancellation;
+    @Nullable
     private Object submittedGeneration;
     @Nullable
     private IGrid calculationGrid;
@@ -230,23 +232,53 @@ public class ContainerCraftConfirm extends AEBaseContainer implements ISubGui {
     public static void openWithBatchCrafting(@Nullable IActionHost terminal, EntityPlayerMP player,
                                              @Nullable GuiHostLocator locator, List<GenericStack> missingMaterials,
                                              TemporaryPseudoCraftingProvider mainProvider) {
+        openWithBatchCrafting(terminal, player, locator, missingMaterials, mainProvider, null);
+    }
+
+    public static boolean openWithBatchCrafting(@Nullable IActionHost terminal, EntityPlayerMP player,
+                                                @Nullable GuiHostLocator locator, List<GenericStack> missingMaterials,
+                                                TemporaryPseudoCraftingProvider mainProvider,
+                                                @Nullable Container returnToContainerOverride) {
         if (terminal == null || locator == null || missingMaterials.isEmpty()) {
-            return;
+            return false;
         }
 
         try {
-            SwitchGuisPacket.openSubGui(player, locator, GuiIds.GuiKey.CRAFT_CONFIRM, null);
+            if (!SwitchGuisPacket.openSubGui(player, locator, GuiIds.GuiKey.CRAFT_CONFIRM,
+                returnToContainerOverride)) {
+                return false;
+            }
 
             if (player.openContainer instanceof ContainerCraftConfirm container) {
                 if (!container.planBatchJob(missingMaterials, mainProvider)) {
                     container.setValidContainer(false);
-                    return;
+                    if (returnToContainerOverride != null) {
+                        SwitchGuisPacket.restoreExternalGui(player);
+                    }
+                    return false;
                 }
 
                 container.detectAndSendChanges();
+                return true;
             }
         } catch (Throwable e) {
             AELog.info(e);
+            if (player.openContainer instanceof ContainerCraftConfirm && returnToContainerOverride != null) {
+                SwitchGuisPacket.restoreExternalGui(player);
+            }
+        }
+        return false;
+    }
+
+    public void setRecipeTransferCancellation(@Nullable Runnable cancellation) {
+        this.recipeTransferCancellation = cancellation;
+    }
+
+    private void cancelRecipeTransfer() {
+        Runnable cancellation = this.recipeTransferCancellation;
+        this.recipeTransferCancellation = null;
+        if (cancellation != null) {
+            cancellation.run();
         }
     }
 
@@ -826,6 +858,7 @@ public class ContainerCraftConfirm extends AEBaseContainer implements ISubGui {
                 return;
             }
             if (successful) {
+                this.recipeTransferCancellation = null;
                 this.setAutoStart(false);
                 boolean hasQueuedJobs = this.autoCraftingQueue != null && !this.autoCraftingQueue.isEmpty();
                 EntityPlayer player = getPlayer();
@@ -903,6 +936,7 @@ public class ContainerCraftConfirm extends AEBaseContainer implements ISubGui {
     public void onContainerClosed(@NotNull EntityPlayer player) {
         var order = this.pendingFillsOrder;
         super.onContainerClosed(player);
+        this.cancelRecipeTransfer();
         this.cancelPendingCalculations();
         PendingGridFills.scheduleAbandonCheck(player, order);
     }
@@ -1101,6 +1135,12 @@ public class ContainerCraftConfirm extends AEBaseContainer implements ISubGui {
 
         EntityPlayer player = getPlayerInventory().player;
         if (player instanceof EntityPlayerMP serverPlayer) {
+            if (this.recipeTransferCancellation != null) {
+                cancelRecipeTransfer();
+                if (SwitchGuisPacket.restoreExternalGui(serverPlayer)) {
+                    return;
+                }
+            }
             if (this.autoCraftingQueue != null && !this.autoCraftingQueue.isEmpty()) {
                 ContainerCraftConfirm.openWithCraftingList(getActionHost(), serverPlayer, getLocator(),
                     this.autoCraftingQueue, getReturnToContainerOverride());

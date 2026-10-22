@@ -47,6 +47,7 @@ public class NetworkAmount {
 
     private static final WeakHashMap<AEKey, Long> AMOUNTS = new WeakHashMap<>();
     private static final WeakHashMap<AEKey, Long> REFRESH_AT = new WeakHashMap<>();
+    private static final WeakHashMap<AEKey, Boolean> CRAFTABLE = new WeakHashMap<>();
 
     private static int clientTicks;
     private static int scanCountdown = SCAN_TICKS;
@@ -65,15 +66,38 @@ public class NetworkAmount {
     public static void clear() {
         AMOUNTS.clear();
         REFRESH_AT.clear();
+        CRAFTABLE.clear();
         scanCountdown = 0;
     }
 
-    public static void acceptAmountResult(AEKey what, long amount) {
+    public static long knownAmount(AEKey what) {
+        return AMOUNTS.getOrDefault(what, NetworkAmountResultPacket.NO_ANSWER);
+    }
+
+    public static boolean knownCraftable(AEKey what) {
+        return Boolean.TRUE.equals(CRAFTABLE.get(what));
+    }
+
+    public static boolean isQueryPending(AEKey what) {
+        return hasWirelessTerminal() && !AMOUNTS.containsKey(what);
+    }
+
+    public static void requestAmount(AEKey what) {
+        if (!hasWirelessTerminal() || clientTicks < REFRESH_AT.getOrDefault(what, 0L)) {
+            return;
+        }
+        REFRESH_AT.put(what, (long) (clientTicks + REFRESH_TICKS));
+        InitNetwork.sendToServer(new NetworkAmountQueryPacket(what, inventoryTerminals, baubleTerminals));
+    }
+
+    public static void acceptAmountResult(AEKey what, long amount, boolean craftable) {
         AMOUNTS.put(what, amount);
+        CRAFTABLE.put(what, craftable);
         REFRESH_AT.put(what, (long) (clientTicks + (amount == NetworkAmountResultPacket.NO_ANSWER ? IDLE_TICKS : REFRESH_TICKS)));
         if (amount == NetworkAmountResultPacket.NO_ANSWER) {
             scanCountdown = 0;
         }
+        Integrations.hei().refreshRecipeTransferLayouts();
     }
 
     @SubscribeEvent
@@ -113,10 +137,7 @@ public class NetworkAmount {
             return;
         }
 
-        if (clientTicks >= REFRESH_AT.getOrDefault(what, 0L)) {
-            REFRESH_AT.put(what, (long) (clientTicks + REFRESH_TICKS));
-            InitNetwork.sendToServer(new NetworkAmountQueryPacket(what, inventoryTerminals, baubleTerminals));
-        }
+        requestAmount(what);
 
         if (AMOUNTS.containsKey(what)) {
             long amount = AMOUNTS.get(what);
@@ -167,10 +188,15 @@ public class NetworkAmount {
         if (inventory != inventoryTerminals || baubles != baubleTerminals) {
             AMOUNTS.clear();
             REFRESH_AT.clear();
+            CRAFTABLE.clear();
         }
 
         inventoryTerminals = inventory;
         baubleTerminals = baubles;
+    }
+
+    public static void refreshWirelessTerminals(EntityPlayer player) {
+        scanWirelessTerminals(player);
     }
 
     private static long scanTerminals(EntityPlayer player, int slots, boolean isBaubleSlot) {

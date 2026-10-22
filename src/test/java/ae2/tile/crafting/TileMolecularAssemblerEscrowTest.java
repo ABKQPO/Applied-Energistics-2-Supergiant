@@ -66,6 +66,7 @@ class TileMolecularAssemblerEscrowTest {
         }
     }
 
+    @SuppressWarnings("unchecked")
     private static void withDecoder(PatternDecode decode, CheckedAction action) throws Exception {
         var decoder = new IPatternDetailsDecoder() {
             @Override
@@ -113,8 +114,14 @@ class TileMolecularAssemblerEscrowTest {
         method.invoke(assembler);
     }
 
+    @SuppressWarnings("unchecked")
     private static Deque<GenericStack> completedQueue(TileMolecularAssembler assembler) throws Exception {
         return (Deque<GenericStack>) field("completedOutputs").get(assembler);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<IAssemblerPattern> patterns(TileMolecularAssembler assembler) throws Exception {
+        return (List<IAssemblerPattern>) field("patterns").get(assembler);
     }
 
     private static void refill(TileMolecularAssembler assembler) throws Exception {
@@ -441,7 +448,7 @@ class TileMolecularAssemblerEscrowTest {
         var assembler = new SlotCountAssembler();
         rebuildPatterns(assembler);
         var pattern = pushPattern();
-        ((List<IAssemblerPattern>) field("patterns").get(assembler)).add(pattern);
+        patterns(assembler).add(pattern);
         var version = field("terminalContentsVersion").getLong(assembler);
         var generation = field("craftGeneration").get(assembler);
         int saves = assembler.saves;
@@ -451,7 +458,7 @@ class TileMolecularAssemblerEscrowTest {
         Assertions.assertNotSame(generation, field("craftGeneration").get(assembler));
         assertEquals(saves + 1, assembler.saves);
         var duringUpgrade = pushPattern(assembler::onUpgradesChanged);
-        ((List<IAssemblerPattern>) field("patterns").get(assembler)).add(duringUpgrade);
+        patterns(assembler).add(duringUpgrade);
         var holder = appleInputs();
         assertFalse(assembler.pushPattern(duringUpgrade, holder, 1));
         assertEquals(7, holder[0].get(AEItemKey.of(Items.APPLE)));
@@ -463,14 +470,14 @@ class TileMolecularAssemblerEscrowTest {
         var assembler = new SlotCountAssembler();
         rebuildPatterns(assembler);
         var pattern = pushPattern();
-        ((List<IAssemblerPattern>) field("patterns").get(assembler)).add(pattern);
+        patterns(assembler).add(pattern);
         long version = field("terminalContentsVersion").getLong(assembler);
         assembler.slots = 18;
         assembler.onUpgradesChanged();
         assertTrue(((List<?>) field("patterns").get(assembler)).isEmpty());
         assertEquals(18, field("indexedPatternSlots").getInt(assembler));
         assertEquals(version + 1, field("terminalContentsVersion").getLong(assembler));
-        ((List<IAssemblerPattern>) field("patterns").get(assembler)).add(pattern);
+        patterns(assembler).add(pattern);
         assembler.onChangeInventory(assembler.getPatternInventory(), 0);
         assertTrue(((List<?>) field("patterns").get(assembler)).isEmpty());
         assertEquals(version + 2, field("terminalContentsVersion").getLong(assembler));
@@ -482,7 +489,7 @@ class TileMolecularAssemblerEscrowTest {
         var inv = assembler.getPatternInventory();
         inv.setItemDirect(0, new ItemStack(Items.PAPER));
         inv.setItemDirect(1, new ItemStack(Items.BOOK));
-        var old = (List<IAssemblerPattern>) field("patterns").get(assembler);
+        var old = patterns(assembler);
         var oldPattern = pushPattern();
         old.add(oldPattern);
         assembler.setWorld(decoderWorld());
@@ -525,7 +532,7 @@ class TileMolecularAssemblerEscrowTest {
     void pushOverflowRejectsBeforeTakingInputCustody() throws Exception {
         var assembler = new ActiveAssembler();
         var pattern = pushPattern();
-        ((List<IAssemblerPattern>) field("patterns").get(assembler)).add(pattern);
+        patterns(assembler).add(pattern);
         var holder = new KeyCounter[]{new KeyCounter(), new KeyCounter()};
         holder[0].add(AEItemKey.of(Items.APPLE), Long.MAX_VALUE);
         holder[1].add(AEItemKey.of(Items.APPLE), 1);
@@ -543,7 +550,7 @@ class TileMolecularAssemblerEscrowTest {
     void acceptedPushPublishesEscrowBeforeSaveAndClearsCaller() throws Exception {
         var assembler = new ActiveAssembler();
         var pattern = pushPattern();
-        ((List<IAssemblerPattern>) field("patterns").get(assembler)).add(pattern);
+        patterns(assembler).add(pattern);
         var holder = new KeyCounter[]{new KeyCounter()};
         holder[0].add(AEItemKey.of(Items.APPLE), 7);
         assertTrue(assembler.pushPattern(pattern, holder, 1));
@@ -558,7 +565,7 @@ class TileMolecularAssemblerEscrowTest {
     void clearDuringRecipeRejectsOuterPushWithoutTakingInputs() throws Exception {
         var assembler = new ActiveAssembler();
         var pattern = pushPattern(assembler::clearContent);
-        ((List<IAssemblerPattern>) field("patterns").get(assembler)).add(pattern);
+        patterns(assembler).add(pattern);
         var holder = appleInputs();
         assertFalse(assembler.pushPattern(pattern, holder, 1));
         assertEquals(7, holder[0].get(AEItemKey.of(Items.APPLE)));
@@ -572,8 +579,8 @@ class TileMolecularAssemblerEscrowTest {
         var nested = pushPattern();
         var holder = appleInputs();
         var pattern = pushPattern(() -> assertFalse(assembler.pushPattern(nested, holder, 1)));
-        ((List<IAssemblerPattern>) field("patterns").get(assembler)).add(pattern);
-        ((List<IAssemblerPattern>) field("patterns").get(assembler)).add(nested);
+        patterns(assembler).add(pattern);
+        patterns(assembler).add(nested);
         assertTrue(assembler.pushPattern(pattern, holder, 1));
         assertEquals(0, holder[0].get(AEItemKey.of(Items.APPLE)));
         assertEquals(1, field("pendingCrafts").getInt(assembler));
@@ -589,8 +596,8 @@ class TileMolecularAssemblerEscrowTest {
             throw new IllegalStateException("recipe fixture");
         });
         var valid = pushPattern();
-        ((List<IAssemblerPattern>) field("patterns").get(assembler)).add(broken);
-        ((List<IAssemblerPattern>) field("patterns").get(assembler)).add(valid);
+        patterns(assembler).add(broken);
+        patterns(assembler).add(valid);
         var holder = appleInputs();
         assertThrows(IllegalStateException.class, () -> assembler.pushPattern(broken, holder, 1));
         assertEquals(7, holder[0].get(AEItemKey.of(Items.APPLE)));
@@ -603,7 +610,7 @@ class TileMolecularAssemblerEscrowTest {
     void postCommitSaveFailureStillReturnsSuccessfulPushReceipt() throws Exception {
         var assembler = new FailingSaveAssembler();
         var pattern = pushPattern();
-        ((List<IAssemblerPattern>) field("patterns").get(assembler)).add(pattern);
+        patterns(assembler).add(pattern);
         var holder = appleInputs();
         assembler.fail = true;
         assertTrue(assembler.pushPattern(pattern, holder, 1));
@@ -637,7 +644,7 @@ class TileMolecularAssemblerEscrowTest {
     void schedulingFailureAfterCommitStillReturnsSuccessfulPushReceipt() throws Exception {
         var assembler = new FailingWakeAssembler();
         var pattern = pushPattern();
-        ((List<IAssemblerPattern>) field("patterns").get(assembler)).add(pattern);
+        patterns(assembler).add(pattern);
         var holder = appleInputs();
         assertTrue(assembler.pushPattern(pattern, holder, 1));
         assertEquals(0, holder[0].get(AEItemKey.of(Items.APPLE)));
@@ -655,7 +662,7 @@ class TileMolecularAssemblerEscrowTest {
             }
         };
         var pattern = pushPattern();
-        ((List<IAssemblerPattern>) field("patterns").get(assembler)).add(pattern);
+        patterns(assembler).add(pattern);
         var holder = appleInputs();
         assertEquals(fatal, assertThrows(OutOfMemoryError.class, () -> assembler.pushPattern(pattern, holder, 1)));
         assertFalse(field("preparingPush").getBoolean(assembler));
@@ -1000,6 +1007,7 @@ class TileMolecularAssemblerEscrowTest {
         private final List<String> transitions = new ArrayList<>();
 
         @Override
+        @SuppressWarnings("unchecked")
         protected IManagedGridNode createMainNode() {
             return (IManagedGridNode) Proxy.newProxyInstance(IManagedGridNode.class.getClassLoader(),
                 new Class<?>[]{IManagedGridNode.class}, (proxy, method, args) -> {

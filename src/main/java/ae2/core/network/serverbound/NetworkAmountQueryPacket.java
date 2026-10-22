@@ -2,6 +2,7 @@ package ae2.core.network.serverbound;
 
 import ae2.api.implementations.items.WirelessTerminalApi;
 import ae2.api.networking.storage.IStorageService;
+import ae2.api.stacks.AEItemKey;
 import ae2.api.stacks.AEKey;
 import ae2.core.network.InitNetwork;
 import ae2.core.network.ServerboundPacket;
@@ -79,7 +80,9 @@ public class NetworkAmountQueryPacket extends ServerboundPacket {
         }
 
         long amount = service.getCachedInventory().get(this.key);
-        InitNetwork.sendToClient(player, new NetworkAmountResultPacket(this.key, amount));
+        boolean craftable = this.key instanceof AEItemKey
+            && context.node().grid().getCraftingService().isCraftable(this.key);
+        InitNetwork.sendToClient(player, new NetworkAmountResultPacket(this.key, amount, craftable));
     }
 
     /**

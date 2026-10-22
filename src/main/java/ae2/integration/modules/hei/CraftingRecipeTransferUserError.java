@@ -21,19 +21,27 @@ final class CraftingRecipeTransferUserError implements IRecipeTransferError {
     private final List<String> tooltip;
     private final IntCollection missingGuiSlots;
     private final IntCollection craftableGuiSlots;
+    private final boolean transferEnabled;
 
     private CraftingRecipeTransferUserError(IRecipeLayout recipeLayout,
                                             List<String> tooltip,
                                             IntCollection missingGuiSlots,
-                                            IntCollection craftableGuiSlots) {
+                                            IntCollection craftableGuiSlots,
+                                            boolean transferEnabled) {
         this.recipeLayout = recipeLayout;
-        this.tooltip = List.copyOf(tooltip);
+        this.tooltip = tooltip;
         this.missingGuiSlots = IntCollections.unmodifiable(missingGuiSlots);
         this.craftableGuiSlots = IntCollections.unmodifiable(craftableGuiSlots);
+        this.transferEnabled = transferEnabled;
     }
 
     static IRecipeTransferError create(IRecipeLayout recipeLayout, CraftingRecipeTransferAnalysis analysis) {
-        List<String> tooltip = new ObjectArrayList<>();
+        return create(recipeLayout, analysis, true);
+    }
+
+    static IRecipeTransferError create(IRecipeLayout recipeLayout, CraftingRecipeTransferAnalysis analysis,
+                                       boolean transferEnabled) {
+        List<String> tooltip = new ObjectArrayList<>(6);
         tooltip.add(HeiText.MoveItems.getLocal());
 
         if (analysis.outcome() == CraftingRecipeTransferAnalysis.Outcome.READY) {
@@ -43,11 +51,11 @@ final class CraftingRecipeTransferUserError implements IRecipeTransferError {
         if (analysis.hasImmediatelyAvailableIngredients()) {
             tooltip.add(TextFormatting.RED + ItemModText.RecipeTransferImportsAvailable.getLocal());
         }
-        if (analysis.hasCraftableMissingIngredients()) {
+        if (analysis.hasPotentiallyCraftableMissingIngredients()) {
             tooltip.add(TextFormatting.RED + ItemModText.RecipeTransferRequestsCraftableMissing.getLocal());
         }
         if (analysis.hasUncraftableMissingIngredients()) {
-            if (analysis.hasCraftableMissingIngredients()) {
+            if (analysis.hasPotentiallyCraftableMissingIngredients()) {
                 tooltip.add(TextFormatting.RED + ItemModText.RecipeTransferLeavesMissing.getLocal());
             } else if (!analysis.hasImmediatelyAvailableIngredients()) {
                 tooltip.add(TextFormatting.RED + ItemModText.NoItems.getLocal());
@@ -57,12 +65,12 @@ final class CraftingRecipeTransferUserError implements IRecipeTransferError {
         }
 
         return new CraftingRecipeTransferUserError(recipeLayout, tooltip, analysis.getMissingGuiSlots(),
-            analysis.getCraftableGuiSlots());
+            analysis.getCraftableGuiSlots(), transferEnabled);
     }
 
     @Override
-    public Type getType() {
-        enableTransferButton();
+    public @NotNull Type getType() {
+        updateTransferButton();
         return Type.USER_FACING;
     }
 
@@ -79,14 +87,14 @@ final class CraftingRecipeTransferUserError implements IRecipeTransferError {
             minecraft.fontRenderer);
     }
 
-    private void enableTransferButton() {
+    private void updateTransferButton() {
         if (!(this.recipeLayout instanceof RecipeLayout concreteLayout)) {
             return;
         }
 
         RecipeTransferButton button = concreteLayout.getRecipeTransferButton();
         if (button != null) {
-            button.enabled = true;
+            button.enabled = this.transferEnabled;
             button.visible = true;
         }
     }

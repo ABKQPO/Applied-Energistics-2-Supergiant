@@ -3,6 +3,7 @@ package ae2.integration.modules.hei;
 import ae2.container.me.items.ContainerCraftingTerm;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.ints.IntCollection;
+import it.unimi.dsi.fastutil.ints.IntIterator;
 import it.unimi.dsi.fastutil.ints.IntList;
 import it.unimi.dsi.fastutil.ints.IntRBTreeSet;
 import it.unimi.dsi.fastutil.ints.IntSet;
@@ -12,20 +13,32 @@ record CraftingRecipeTransferAnalysis(
     Outcome outcome,
     IntSet missingGuiSlots,
     IntSet craftableGuiSlots,
-    int ingredientCount) {
+    int ingredientCount,
+    boolean hasAvailableIngredients,
+    boolean hasPendingNetworkQuery) {
 
     CraftingRecipeTransferAnalysis {
-        missingGuiSlots = IntSets.unmodifiable(new IntRBTreeSet(missingGuiSlots));
-        craftableGuiSlots = IntSets.unmodifiable(new IntRBTreeSet(craftableGuiSlots));
+        missingGuiSlots = IntSets.unmodifiable(missingGuiSlots);
+        craftableGuiSlots = IntSets.unmodifiable(craftableGuiSlots);
     }
 
     static CraftingRecipeTransferAnalysis analyze(ContainerCraftingTerm.MissingIngredientSlots missingSlots,
                                                   int ingredientCount) {
-        return of(missingSlots.missingSlots(), missingSlots.craftableSlots(), ingredientCount);
+        return analyze(missingSlots.missingSlots(), missingSlots.craftableSlots(), ingredientCount, true,
+            missingSlots.missingSlots().size() + missingSlots.craftableSlots().size() < ingredientCount, false);
     }
 
-    private static CraftingRecipeTransferAnalysis of(IntSet missingSlots, IntSet craftableSlots,
-                                                     int ingredientCount) {
+    static CraftingRecipeTransferAnalysis analyzeGuiSlots(IntSet missingSlots, IntSet craftableSlots,
+                                                          int ingredientCount, boolean hasAvailableIngredients,
+                                                          boolean hasPendingNetworkQuery) {
+        return analyze(missingSlots, craftableSlots, ingredientCount, false, hasAvailableIngredients,
+            hasPendingNetworkQuery);
+    }
+
+    private static CraftingRecipeTransferAnalysis analyze(IntSet missingSlots, IntSet craftableSlots,
+                                                          int ingredientCount, boolean craftingGridSlots,
+                                                          boolean hasAvailableIngredients,
+                                                          boolean hasPendingNetworkQuery) {
         int unavailableCount = missingSlots.size() + craftableSlots.size();
 
         Outcome outcome;
@@ -41,24 +54,35 @@ record CraftingRecipeTransferAnalysis(
             outcome = Outcome.PARTIAL_UNCRAFTABLE;
         }
 
-        return new CraftingRecipeTransferAnalysis(outcome, toGuiSlots(missingSlots),
-            toGuiSlots(craftableSlots), ingredientCount);
+        return new CraftingRecipeTransferAnalysis(outcome,
+            craftingGridSlots ? toGuiSlots(missingSlots) : missingSlots,
+            craftingGridSlots ? toGuiSlots(craftableSlots) : craftableSlots, ingredientCount,
+            hasAvailableIngredients, hasPendingNetworkQuery);
     }
 
     private static IntSet toGuiSlots(IntSet slots) {
         IntRBTreeSet result = new IntRBTreeSet();
-        for (int slot : slots) {
-            result.add(slot + 1);
+        IntIterator iterator = slots.iterator();
+        while (iterator.hasNext()) {
+            result.add(iterator.nextInt() + 1);
         }
         return result;
     }
 
     boolean hasImmediatelyAvailableIngredients() {
-        return getUnavailableCount() < ingredientCount;
+        return hasAvailableIngredients;
     }
 
     boolean hasCraftableMissingIngredients() {
         return !craftableGuiSlots.isEmpty();
+    }
+
+    boolean hasPotentiallyCraftableMissingIngredients() {
+        return hasCraftableMissingIngredients() || hasPendingNetworkQuery;
+    }
+
+    boolean canTransfer() {
+        return hasAvailableIngredients || hasPotentiallyCraftableMissingIngredients();
     }
 
     boolean hasUncraftableMissingIngredients() {
@@ -75,10 +99,6 @@ record CraftingRecipeTransferAnalysis(
         IntList result = new IntArrayList(craftableGuiSlots.size());
         result.addAll(craftableGuiSlots);
         return result;
-    }
-
-    private int getUnavailableCount() {
-        return missingGuiSlots.size() + craftableGuiSlots.size();
     }
 
     enum Outcome {
