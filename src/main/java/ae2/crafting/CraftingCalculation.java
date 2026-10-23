@@ -33,6 +33,7 @@ import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 import ae2.api.storage.AEKeyFilter;
 import ae2.core.AEConfig;
+import ae2.core.localization.PlayerMessages;
 import ae2.core.AELog;
 import ae2.crafting.execution.CraftingSupplierLocation;
 import ae2.crafting.execution.CraftingSupplierLocator;
@@ -61,6 +62,7 @@ import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectList;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
+import it.unimi.dsi.fastutil.objects.Object2DoubleOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Reference2BooleanOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Reference2LongMap;
 import it.unimi.dsi.fastutil.objects.Reference2LongOpenHashMap;
@@ -68,7 +70,10 @@ import it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap;
 import net.minecraft.world.World;
 import org.jetbrains.annotations.Nullable;
 
+import java.lang.management.ManagementFactory;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -79,12 +84,26 @@ import java.util.function.Supplier;
 
 public class CraftingCalculation {
     private static final int MAX_LOCAL_REPLANS = 1_000_000;
+    private static final int ALTERNATIVE_ROUNDS = 4;
+    private static final int LEGACY_FALLBACK_STEPS = 20_000;
+    /**
+     * The legacy tree takes at least this many steps per node of the graph, so larger graphs cannot finish within
+     * {@link #LEGACY_FALLBACK_STEPS}.
+     */
+    private static final int LEGACY_STEPS_PER_NODE = 32;
 
     final ICraftingSimulationRequester simRequester;
     private final ICraftingService craftingService;
     private final NetworkCraftingSimulationState networkInv;
     private final World level;
-    private final KeyCounter missing = new KeyCounter();
+    private KeyCounter missing = new KeyCounter();
+    private long fallbackDeadline = Long.MAX_VALUE;
+    private int fallbackSteps;
+    private long limitDeadline = Long.MAX_VALUE;
+    private int limitChecks;
+    private boolean limitExceeded;
+    private boolean tryingAlternatives;
+    private final Set<CraftingPlan> plansKnownToRun = Collections.newSetFromMap(new IdentityHashMap<>());
     private final KeyCounter recursiveMissingSeeds = new KeyCounter();
     private final Object monitor = new Object();
     private final CraftingPerformanceListener performanceListener;
@@ -124,6 +143,8 @@ public class CraftingCalculation {
     private final Set<AEKey> realSeededRecursiveKeys = new ObjectOpenHashSet<>();
     private final Cache<Object, Object> memoCache;
     private boolean memoReplayEnabled = true;
+    // Whether the memo cache can hold anything at all: recording a result copies the whole simulation state
+    private final boolean memoCacheEnabled;
     private final Set<AEKey> recursiveFinalOutputInputs = new ObjectOpenHashSet<>();
     private final KeyCounter recursiveReserveCandidates = new KeyCounter();
     private final Reference2LongOpenHashMap<CraftingTreeNode> recursiveDisplayRequests = new Reference2LongOpenHashMap<>();
@@ -198,6 +219,7 @@ public class CraftingCalculation {
         } else {
             this.memoCache = CacheBuilder.newBuilder().maximumSize(0).build();
         }
+        this.memoCacheEnabled = sharedMemoCache instanceof Cache && memoizationCacheSize() > 0;
 
         var storage = grid.getStorageService();
         var craftingService = grid.getCraftingService();
@@ -237,7 +259,8 @@ public class CraftingCalculation {
 
         if (cached.size() > NetworkCraftingSimulationState.SNAPSHOT_SUBSET_THRESHOLD && service != null) {
             var graph = service.peekCachedGraph(this.output);
-            if (graph != null) {
+            // A graph built without the alternative patterns of its keys cannot tell what they read
+            if (graph != null && !graph.hasAlternatives()) {
                 var keys = graph.getSnapshotKeys();
                 // Subsetting only pays off when the graph touches fewer keys than the network holds: otherwise the
                 // subset would end up copying the whole inventory anyway, on top of one fuzzy lookup per key.
@@ -640,6 +663,10 @@ public class CraftingCalculation {
 
     public ICraftingPlan run() throws InterruptedException {
         this.workerThread = Thread.currentThread();
+        long limit = calculationLimitNanos();
+        if (limit > 0) {
+            this.limitDeadline = LongMath.saturatedAdd(workerTime(), limit);
+        }
         long calculationStart = System.nanoTime();
         try {
             startPerformanceListener();
@@ -653,6 +680,9 @@ public class CraftingCalculation {
                 plan = timed("compute-plan", this::computePlan);
             } else {
                 plan = computePlan();
+            }
+            if (plan instanceof CraftingPlan craftingPlan && !this.plansKnownToRun.contains(craftingPlan)) {
+                plan = CraftingPlanCompactor.repair(craftingPlan, this);
             }
             this.logCraftingJob(plan);
             if (this.usedCraftingTreeTestPattern) {
@@ -672,6 +702,9 @@ public class CraftingCalculation {
             return plan;
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
+            throw ex;
+        } catch (CraftingCalculationFailure ex) {
+            // An expected outcome the player is told about, not worth a stack trace in the log
             throw ex;
         } catch (Exception ex) {
             AELog.info(ex, "Exception during crafting calculation.");
@@ -715,12 +748,13 @@ public class CraftingCalculation {
         return runGraphBasedAttempt(requestedAmount);
     }
 
-    private CraftingPlan runCraftAttempt(long productionAmount, long finalAmount)
-        throws InterruptedException {
-        var tree = getOrCreateLegacyTree();
+    /**
+     * Starts an attempt over. The missing items are a new counter: a plan of an earlier attempt keeps its own.
+     */
+    private void resetAttemptState() {
         this.simulate = false;
         this.allowMissing = true;
-        this.missing.clear();
+        this.missing = new KeyCounter();
         this.recursiveMissingSeeds.clear();
         for (var key : this.recursiveNetCache.keySet()) {
             this.recursiveNetKeyPool.release(key);
@@ -735,6 +769,12 @@ public class CraftingCalculation {
         this.recursiveReserveCandidates.clear();
         this.recursiveDisplayRequests.clear();
         this.graph = null;
+    }
+
+    private CraftingPlan runCraftAttempt(long productionAmount, long finalAmount)
+        throws InterruptedException {
+        var tree = getOrCreateLegacyTree();
+        resetAttemptState();
         tree.resetPossible();
 
         final boolean logCrafting = AELog.isCraftingLogEnabled();
@@ -757,7 +797,7 @@ public class CraftingCalculation {
             }
         } catch (CraftBranchFailure failure) {
             if (failure.hasExplicitMessageKey()) {
-                throw new CraftingCalculationFailure(failure.getLocalizedMessageKey());
+                throw reported(failure);
             }
             if (logCrafting) {
                 this.attempts.add(new CraftAttempt(productionAmount + " failed", timer));
@@ -847,6 +887,21 @@ public class CraftingCalculation {
 
     private CraftingPlan runGraphBasedAttemptBody(CraftingGraph graph, long productionAmount,
                                                   long graphCalculationStart) throws InterruptedException {
+        var graphPlan = planGraph(graph, productionAmount, graphCalculationStart);
+        if (graphPlan == null) {
+            return runCraftAttempt(productionAmount, productionAmount);
+        }
+        if (graph.hasAlternatives() && !this.missing.isEmpty() && !this.tryingAlternatives) {
+            return tryAlternatives(graphPlan, productionAmount, graph.getNodeCount());
+        }
+        return graphPlan;
+    }
+
+    /**
+     * Plans the graph, or returns null when only the legacy tree can plan it.
+     */
+    private @Nullable CraftingPlan planGraph(CraftingGraph graph, long productionAmount,
+                                             long graphCalculationStart) throws InterruptedException {
         recordPerformanceCount("graphNodes", graph.getNodeCount());
         recordPerformanceCount("graphEdges", graph.getEdgeCount());
         long sccUnits = 0;
@@ -867,7 +922,7 @@ public class CraftingCalculation {
             return null;
         });
         if (graph.requiresLegacyFallback()) {
-            return runCraftAttempt(productionAmount, productionAmount);
+            return null;
         }
         boolean hasLocalComponents = false;
         if (topology.isCondensed()) {
@@ -938,8 +993,132 @@ public class CraftingCalculation {
         craftingInventory.addBytes((double) graph.getNodeCount() * 8);
         this.attemptMetrics.recordGraphCalculation(System.nanoTime() - graphCalculationStart);
 
-        return CraftingSimulationState.buildCraftingPlan(
+        var plan = CraftingSimulationState.buildCraftingPlan(
             craftingInventory, this, productionAmount, displayBuilder);
+        // Native patterns without a cycle among them run in any order once they balance, which the graph made sure of
+        if (!topology.isCondensed() && !hasLocalUnits && !hasLocalComponents) {
+            this.plansKnownToRun.add(plan);
+        }
+        return plan;
+    }
+
+    /**
+     * The graph uses the pattern of highest priority of each key. With items missing, other patterns may need less of
+     * them: the graph is planned again with the patterns needing the least of what went missing, weighing each item by
+     * how often it did. The legacy tree, which splits a request between patterns in the order of their priorities, gets
+     * a few steps last and wins a tie.
+     */
+    private CraftingPlan tryAlternatives(CraftingPlan graphPlan, long productionAmount, int graphNodes)
+        throws InterruptedException {
+        var best = graphPlan;
+        var plan = best;
+        var scarcity = new Object2DoubleOpenHashMap<AEKey>();
+        var tried = new ObjectOpenHashSet<Map<AEKey, IPatternDetails>>();
+        tried.add(Map.of());
+        this.tryingAlternatives = true;
+        try {
+            for (int round = 0; round < ALTERNATIVE_ROUNDS && !plan.missingItems().isEmpty(); round++) {
+                for (var entry : plan.missingItems()) {
+                    scarcity.addTo(entry.getKey(), 1);
+                }
+                var choices = timed("choosePatterns",
+                    () -> new GraphBuilder(this).choosePatterns(this.output, scarcity));
+                if (!tried.add(choices)) continue;
+                resetAttemptState();
+                CraftingPlan alternative;
+                try {
+                    var graph = timed("buildAlternativeGraph",
+                        () -> new GraphBuilder(this, choices).buildGraph(this.output, productionAmount));
+                    this.graph = graph;
+                    alternative = needsLegacyTree(graph) ? null
+                        : planGraph(graph, productionAmount, System.nanoTime());
+                } catch (CraftingCalculationFailure | IllegalArgumentException | IllegalStateException e) {
+                    if (this.limitExceeded) throw e;
+                    alternative = null;
+                }
+                if (alternative == null) break;
+                plan = alternative;
+                if (totalAmount(plan.missingItems()) < totalAmount(best.missingItems())) {
+                    best = plan;
+                }
+            }
+        } finally {
+            this.tryingAlternatives = false;
+        }
+
+        long limit = fallbackNanos();
+        if (limit <= 0 || (long) graphNodes * LEGACY_STEPS_PER_NODE > LEGACY_FALLBACK_STEPS) {
+            return best;
+        }
+        this.fallbackDeadline = LongMath.saturatedAdd(workerTime(), limit);
+        this.fallbackSteps = LEGACY_FALLBACK_STEPS;
+        try {
+            var legacyPlan = runCraftAttempt(productionAmount, productionAmount);
+            if (legacyPlan != null && totalAmount(legacyPlan.missingItems()) <= totalAmount(best.missingItems())) {
+                return legacyPlan;
+            }
+        } catch (FallbackTimeout ignored) {
+            // Keep the plan of the graph
+        } catch (CraftingCalculationFailure failure) {
+            if (this.limitExceeded) throw failure;
+        } finally {
+            this.fallbackDeadline = Long.MAX_VALUE;
+        }
+        return best;
+    }
+
+    private static boolean needsLegacyTree(CraftingGraph graph) {
+        if (graph.requiresLegacyFallback()) {
+            return true;
+        }
+        var topology = graph.getTopology();
+        if (topology.isCondensed()) {
+            for (var component : topology.getComponents()) {
+                if (component.cyclic() && component.nodes().size() > 1) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static long totalAmount(KeyCounter counter) {
+        long total = 0;
+        for (var entry : counter) {
+            total = LongMath.saturatedAdd(total, entry.getLongValue());
+        }
+        return total;
+    }
+
+    private static long workerTime() {
+        var threads = ManagementFactory.getThreadMXBean();
+        return threads.isCurrentThreadCpuTimeSupported() ? threads.getCurrentThreadCpuTime() : System.nanoTime();
+    }
+
+    private static long fallbackNanos() {
+        try {
+            return AEConfig.instance().getCraftingFallbackNanos();
+        } catch (IllegalStateException ignored) {
+            // Tests can construct calculations before the mod configuration exists.
+            return 0;
+        }
+    }
+
+    private static long calculationLimitNanos() {
+        try {
+            return AEConfig.instance().getCraftingCalculationLimitNanos();
+        } catch (IllegalStateException ignored) {
+            return 0;
+        }
+    }
+
+    /**
+     * Ends an attempt that ran out of its steps or time, see {@link #tryAlternatives}.
+     */
+    private static final class FallbackTimeout extends RuntimeException {
+        private FallbackTimeout() {
+            super("Crafting calculation fallback ran out of time", null, false, false);
+        }
     }
 
     /**
@@ -1027,6 +1206,15 @@ public class CraftingCalculation {
     }
 
     public void handlePausing() throws InterruptedException {
+        if (this.fallbackDeadline != Long.MAX_VALUE
+            && (--this.fallbackSteps < 0 || (this.fallbackSteps & 1023) == 0 && workerTime() > this.fallbackDeadline)) {
+            throw new FallbackTimeout();
+        }
+        if (this.limitDeadline != Long.MAX_VALUE && (++this.limitChecks & 1023) == 0
+            && Thread.currentThread() == this.workerThread && workerTime() > this.limitDeadline) {
+            this.limitExceeded = true;
+            throw new CraftingCalculationFailure(PlayerMessages.CraftingTooLong);
+        }
         if (this.incTime > AEConfig.CRAFTING.craftingCalculationPausingInterval) {
             this.incTime = 0;
 
@@ -1152,6 +1340,32 @@ public class CraftingCalculation {
         this.processStack.removeLast();
         this.processHashPrefixes.removeInt(this.processHashPrefixes.size() - 1);
         this.processHashPowers.removeInt(this.processHashPowers.size() - 1);
+    }
+
+    /**
+     * The cycle the request for an item being requested further up runs around: the items requested from that request
+     * down, and the patterns of the processes between them.
+     */
+    @Nullable
+    NoNetOutputCycle describeCycle(AEKey what) {
+        int requestIndex = this.requestStack.lastIndexOf(what);
+        if (requestIndex < 0) {
+            return null;
+        }
+        var items = new ObjectArrayList<AEKey>(this.requestStack.subList(requestIndex, this.requestStack.size()));
+        items.add(what);
+        var patterns = new ObjectArrayList<IPatternDetails>();
+        for (int i = requestIndex; i < this.processStack.size(); i++) {
+            patterns.add(this.processStack.get(i).getDetails());
+        }
+        return NoNetOutputCycle.of(items, patterns);
+    }
+
+    // The failure the player is told about, with where the machines of a cycle without net output are
+    private CraftingCalculationFailure reported(CraftBranchFailure failure) {
+        var cycle = failure.getCycle();
+        return new CraftingCalculationFailure(failure.getLocalizedMessageKey(),
+            cycle == null ? null : cycle.locate(this::getMachineInfo));
     }
 
     public boolean cycleHasNetOutput(AEKey what) {
@@ -1562,7 +1776,7 @@ public class CraftingCalculation {
                         continue;
                     }
                     if (failure.hasExplicitMessageKey()) {
-                        throw new CraftingCalculationFailure(failure.getLocalizedMessageKey());
+                        throw reported(failure);
                     }
                     restoreRecursiveReserveBranchMarker(branchMarker);
                     this.missing.add(what, deficit);
@@ -1933,7 +2147,7 @@ public class CraftingCalculation {
             if (this.realSeededRecursiveKeys.contains(key) || this.realRecursiveSeeds.contains(key)
                 || hasRealSeededRecursiveRequestFor(key)
                 || (this.recursiveMissingSeeds.get(key) <= 0
-                && inv.getCraftedAmount(key) >= entry.getLongValue())) {
+                && inv.getNetCraftedAmount(key) >= entry.getLongValue())) {
                 keys.add(key);
             }
         }
@@ -2239,6 +2453,13 @@ public class CraftingCalculation {
     void restoreMissingItemsMarker(KeyCounter marker) {
         this.missing.clear();
         this.missing.addAll(marker);
+    }
+
+    /**
+     * How much of the key the network held when the calculation started.
+     */
+    long getNetworkAmount(AEKey what) {
+        return this.networkInv.getAvailableAmount(what);
     }
 
     World getLevel() {
@@ -2711,9 +2932,20 @@ public class CraftingCalculation {
             this.recursiveDisplayRequestsDelta.defaultReturnValue(0);
         }
 
-        boolean isApplicable(CraftingSimulationState inv) {
+        /**
+         * How many times the result is applied for a request, or 0 when the request is no whole multiple of it: a
+         * result is only ever replayed whole, and rounding up would craft more than was asked for.
+         */
+        long multiplierFor(long requestedAmount) {
+            if (this.baseTimes <= 0) {
+                return 1;
+            }
+            return requestedAmount > 0 && requestedAmount % this.baseTimes == 0 ? requestedAmount / this.baseTimes : 0;
+        }
+
+        boolean isApplicable(CraftingSimulationState inv, long multiplier) {
             for (var entry : extracted) {
-                if (inv.getAvailableAmount(entry.getKey()) < entry.getLongValue()) {
+                if (inv.getAvailableAmount(entry.getKey()) < LongMath.saturatedMultiply(entry.getLongValue(), multiplier)) {
                     return false;
                 }
             }
@@ -2837,9 +3069,17 @@ public class CraftingCalculation {
             this.recursiveDisplayRequestsDelta.defaultReturnValue(0);
         }
 
+        /**
+         * @return the bundle for a whole multiple of its crafts, or null for any other amount: every pattern rounded on
+         * its own would no longer balance what one makes against what the next takes
+         */
+        @Nullable
         Bundle scale(long targetTimes) {
             if (targetTimes == this.baseTimes) {
                 return this;
+            }
+            if (this.baseTimes <= 0 || targetTimes % this.baseTimes != 0) {
+                return null;
             }
 
             double multiplier = (double) targetTimes / this.baseTimes;
@@ -2929,6 +3169,22 @@ public class CraftingCalculation {
             }
             return true;
         }
+    }
+
+    private static int memoizationCacheSize() {
+        try {
+            return AEConfig.instance().getMemoizationCacheSize();
+        } catch (IllegalStateException ignored) {
+            // Tests can construct calculations before the mod configuration exists.
+            return 0;
+        }
+    }
+
+    /**
+     * Whether results are kept and replayed right now. Recording one is not free, so the tree skips it otherwise.
+     */
+    boolean isMemoRecording() {
+        return this.memoReplayEnabled && this.memoCacheEnabled;
     }
 
     @Nullable

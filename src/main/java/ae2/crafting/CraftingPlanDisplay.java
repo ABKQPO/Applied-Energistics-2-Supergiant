@@ -6,6 +6,7 @@ import ae2.api.stacks.KeyCounter;
 import ae2.crafting.graph.CraftingGraphDisplaySnapshot;
 import ae2.crafting.graph.LocalDisplayFragment;
 import ae2.integration.data.CraftingGraphDisplayTreeConverter;
+import ae2.integration.data.CraftingTreeCycles;
 import ae2.integration.data.LiteCraftTreeNode;
 import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
@@ -79,12 +80,12 @@ public final class CraftingPlanDisplay {
             var builder = this.graphDisplayBuilder;
             if (builder != null) {
                 // Build the immutable graph snapshot lazily on first GUI open, then hydrate machine info.
-                return CraftingGraphDisplayTreeConverter.toLiteTree(hydrateMachineInfo(builder.build()),
-                    output.amount(), missingItems);
+                return CraftingTreeCycles.annotate(CraftingGraphDisplayTreeConverter.toLiteTree(
+                    hydrateMachineInfo(builder.build()), output.amount(), missingItems));
             }
             if (legacyTree != null) {
-                return LiteCraftTreeNode.of(legacyTree, null, output.amount(),
-                    new LiteCraftTreeNode.PatternTimesAllocator(patternTimes, usedItems, missingItems));
+                return CraftingTreeCycles.annotate(LiteCraftTreeNode.of(legacyTree, null, output.amount(),
+                    new LiteCraftTreeNode.PatternTimesAllocator(patternTimes, usedItems, missingItems)));
             }
             throw new IllegalStateException("Crafting plan has no display source");
         } finally {

@@ -240,6 +240,10 @@ public final class Icon {
     public static final Icon CRAFTING_TREE_NODE_MISSING = registerBuiltin("crafting_tree_node_missing");
     public static final Icon CRAFTING_TREE_MISSING_OVERLAY = registerBuiltin("crafting_tree_missing_overlay");
     public static final Icon CRAFTING_TREE_MACHINE = registerBuiltin("crafting_tree_machine");
+    public static final Icon CRAFTING_TREE_NODE_CYCLE = registerBuiltin("crafting_tree_node_cycle");
+    public static final Icon CRAFTING_TREE_CYCLE = registerBuiltin("crafting_tree_cycle");
+    public static final Icon CRAFTING_TREE_FEEDBACK = registerBuiltin("crafting_tree_feedback");
+    public static final Icon CRAFTING_TREE_FOLDED = registerBuiltin("crafting_tree_folded");
 
     public static final Icon ENABLED = registerBuiltin("enabled");
     public static final Icon DISABLED = registerBuiltin("disabled");

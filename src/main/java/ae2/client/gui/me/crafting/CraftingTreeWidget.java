@@ -20,6 +20,9 @@ import ae2.integration.data.LiteCraftTreeNode;
 import ae2.integration.data.LiteCraftTreeProc;
 import ae2.integration.modules.hei.CraftingTreeUtils;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import it.unimi.dsi.fastutil.objects.Reference2IntOpenHashMap;
+import it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
 import mezz.jei.api.recipe.IFocus;
 import mezz.jei.config.KeyBindings;
 import net.minecraft.client.Minecraft;
@@ -47,6 +50,8 @@ import java.awt.image.BufferedImage;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public class CraftingTreeWidget implements ICompositeWidget {
     private static final int SCREENSHOT_TILE_SIZE = 2048;
@@ -68,6 +73,10 @@ public class CraftingTreeWidget implements ICompositeWidget {
     private static final int LINE_SHADOW_COLOR = 0xFF4D4D67;
     private static final int MISSING_LINE_COLOR = 0xFFEE6363;
     private static final int MISSING_LINE_SHADOW_COLOR = 0xFF8B3A3A;
+    private static final int FEEDBACK_LINE_COLOR = 0xFFF2B33D;
+    private static final int FEEDBACK_LINE_SHADOW_COLOR = 0xFF7A4E12;
+    // Between the lines a ring's inputs are fed back along, left of its first column
+    private static final int FEEDBACK_LANE = 4;
 
     private final List<TreeRow> rows = new ObjectArrayList<>();
 
@@ -89,6 +98,16 @@ public class CraftingTreeWidget implements ICompositeWidget {
     private TreeNode hovered;
     private boolean missingOnly;
     private int renderedNodes;
+    @Nullable
+    private CraftingTreeCycleView.Contracted contracted;
+    @Nullable
+    private CraftingTreeCycleView.Contracted contractedMissingOnly;
+    // The rings open, each opened from the one before
+    private final List<RingState> rings = new ObjectArrayList<>();
+    private final Map<LiteCraftTreeNode, TreeNode> nodeWidgets = new Reference2ObjectOpenHashMap<>();
+    // Per craft, the node a line to it ends at: its machine, or the node it makes
+    private final Map<LiteCraftTreeProc, TreeNode> procAnchors = new Reference2ObjectOpenHashMap<>();
+    private int lanePadding;
 
     private static boolean hasSameOutput(@Nullable GenericStack left, GenericStack right) {
         return left != null && left.what().equals(right.what()) && left.amount() == right.amount();
@@ -200,12 +219,16 @@ public class CraftingTreeWidget implements ICompositeWidget {
 
         this.root = root;
         this.root.sort();
+        this.rings.clear();
+        this.contracted = CraftingTreeCycleView.contract(root);
         if (LiteCraftTreeNode.isMissing(root)) {
             this.missingOnly = true;
             this.missingOnlyRoot = root.withMissingOnly();
+            this.contractedMissingOnly = CraftingTreeCycleView.contract(this.missingOnlyRoot);
         } else {
             this.missingOnly = false;
             this.missingOnlyRoot = null;
+            this.contractedMissingOnly = null;
         }
         rebuildTree();
     }
@@ -225,9 +248,11 @@ public class CraftingTreeWidget implements ICompositeWidget {
                 throw new IllegalStateException("Missing-only tree is unavailable for " + this.root);
             }
             this.missingOnlyRoot.sort();
+            this.contractedMissingOnly = CraftingTreeCycleView.contract(this.missingOnlyRoot);
         }
 
         this.missingOnly = missingOnly;
+        this.rings.clear();
         rebuildTree();
     }
 
@@ -260,13 +285,14 @@ public class CraftingTreeWidget implements ICompositeWidget {
             int y = offsetY;
             for (TreeRow row : rows) {
                 if (y + row.getHeight() >= 0) {
-                    row.render(new Point(offsetX, y), scaledWidth, scaledMouse);
+                    row.render(new Point(offsetX + lanePadding, y), scaledWidth, scaledMouse);
                 }
                 y += row.getHeight();
                 if (y > scaledHeight) {
                     break;
                 }
             }
+            renderFeedbackLines();
         });
 
         GlStateManager.popMatrix();
@@ -279,7 +305,14 @@ public class CraftingTreeWidget implements ICompositeWidget {
         GlStateManager.blendFunc(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA);
 
         int x = bounds.x + 2;
-        if (selected == null) {
+        var ring = currentRing();
+        if (ring != null) {
+            var region = ring.region();
+            font.drawStringWithShadow(GuiText.CraftingTreeRing.getLocal(region.crafts(), region.feedbacks()),
+                x, bounds.y + bounds.height - 18, 0x80FFFFFF);
+            font.drawStringWithShadow(GuiText.CraftingTreeRingTip.getLocal(),
+                x, bounds.y + bounds.height - 9, 0x80FFFFFF);
+        } else if (selected == null) {
             font.drawStringWithShadow(GuiText.CraftingTreeRenderedNodes.getLocal(renderedNodes, nodes),
                 x, bounds.y + bounds.height - 18, 0x80FFFFFF);
             font.drawStringWithShadow(GuiText.CraftingTreeTip0.getLocal(),
@@ -433,6 +466,9 @@ public class CraftingTreeWidget implements ICompositeWidget {
     private void clearTree() {
         root = null;
         missingOnlyRoot = null;
+        contracted = null;
+        contractedMissingOnly = null;
+        rings.clear();
         selected = null;
         hovered = null;
         missingOnly = false;
@@ -446,7 +482,65 @@ public class CraftingTreeWidget implements ICompositeWidget {
 
     @Nullable
     private LiteCraftTreeNode getCurrentRoot() {
-        return missingOnly ? missingOnlyRoot : root;
+        if (!rings.isEmpty()) {
+            return rings.getLast().ring.root();
+        }
+        var tree = currentContracted();
+        return tree == null ? null : tree.root();
+    }
+
+    @Nullable
+    private CraftingTreeCycleView.Contracted currentContracted() {
+        return missingOnly ? contractedMissingOnly : contracted;
+    }
+
+    @Nullable
+    private CraftingTreeCycleView.Ring currentRing() {
+        return rings.isEmpty() ? null : rings.getLast().ring;
+    }
+
+    public boolean isInRing() {
+        return !rings.isEmpty();
+    }
+
+    private void openRing(CraftingTreeCycleView.Region region) {
+        var tree = currentContracted();
+        if (tree == null) {
+            return;
+        }
+        var state = new RingState(region, offsetX, offsetY);
+        state.ring = CraftingTreeCycleView.ring(region, state.unfolded, tree.entries());
+        rings.add(state);
+        offsetX = 0;
+        offsetY = 0;
+        select(null);
+        rebuildTree();
+    }
+
+    private void unfold(CraftingTreeCycleView.Fold fold) {
+        var state = rings.getLast();
+        var tree = currentContracted();
+        if (tree == null) {
+            return;
+        }
+        state.unfolded.add(fold.node());
+        state.ring = CraftingTreeCycleView.ring(state.region, state.unfolded, tree.entries());
+        rebuildTree();
+    }
+
+    /**
+     * Back to the ring or the tree it was opened from.
+     */
+    public void leaveRing() {
+        if (rings.isEmpty()) {
+            return;
+        }
+        var state = rings.removeLast();
+        select(null);
+        rebuildTree();
+        offsetX = state.savedOffsetX;
+        offsetY = state.savedOffsetY;
+        clampOffsets();
     }
 
     private static int getProcessInputDepth(LiteCraftTreeProc proc) {
@@ -464,6 +558,14 @@ public class CraftingTreeWidget implements ICompositeWidget {
             if (button == 0 && GuiScreen.isShiftKeyDown() && node.highlightMachinesAndClose()) {
                 return true;
             }
+            if (button == 0 && node.fold != null) {
+                unfold(node.fold);
+                return true;
+            }
+            if (button == 0 && node.cycle != null) {
+                openRing(node.cycle);
+                return true;
+            }
             node.select();
             return true;
         }
@@ -478,6 +580,10 @@ public class CraftingTreeWidget implements ICompositeWidget {
 
     @Override
     public boolean onKeyTyped(char typedChar, int keyCode) {
+        if (keyCode == Keyboard.KEY_ESCAPE && !rings.isEmpty()) {
+            leaveRing();
+            return true;
+        }
         GenericStack hoveredOutput = hovered == null ? null : hovered.getOutput();
         if (Integrations.hei().isEnabled() && hoveredOutput != null) {
             int showRecipeKeyCode = KeyBindings.showRecipe.getKeyCode();
@@ -521,6 +627,10 @@ public class CraftingTreeWidget implements ICompositeWidget {
         selected = null;
         nodes = 0;
         rows.clear();
+        nodeWidgets.clear();
+        procAnchors.clear();
+        var ring = currentRing();
+        lanePadding = ring == null ? 0 : FEEDBACK_LANE * ring.feedback().size();
 
         LiteCraftTreeNode treeRoot = getCurrentRoot();
         if (treeRoot != null) {
@@ -543,12 +653,13 @@ public class CraftingTreeWidget implements ICompositeWidget {
             width = Math.max(width, row.getWidth());
             height += row.getHeight();
         }
-        this.totalWidth = width;
+        this.totalWidth = width + lanePadding;
         this.totalHeight = height;
     }
 
     private TreeNode addNodeRecursive(LiteCraftTreeNode node, int depth) {
         TreeNode nodeWidget = new TreeNode(node);
+        nodeWidgets.put(node, nodeWidget);
         if (depth == 0) {
             nodeWidget.root = true;
             nodeWidget.marginTop = ROOT_MARGIN_TOP;
@@ -562,7 +673,7 @@ public class CraftingTreeWidget implements ICompositeWidget {
             int firstProcessDepth = depth + 1;
             int lastProcessDepth = firstProcessDepth + getProcessRenderDepth(proc);
             alignRows(firstProcessDepth, lastProcessDepth);
-            directChildren.addAll(addProcessRecursive(proc, depth + 1));
+            directChildren.addAll(addProcessRecursive(proc, depth + 1, nodeWidget));
             alignRows(firstProcessDepth, lastProcessDepth);
         }
 
@@ -571,8 +682,9 @@ public class CraftingTreeWidget implements ICompositeWidget {
         return nodeWidget;
     }
 
-    private List<TreeNode> addProcessRecursive(LiteCraftTreeProc proc, int depth) {
+    private List<TreeNode> addProcessRecursive(LiteCraftTreeProc proc, int depth, TreeNode parent) {
         if (proc.machines().isEmpty()) {
+            procAnchors.put(proc, parent);
             return addProcessInputs(proc, depth);
         }
 
@@ -586,6 +698,7 @@ public class CraftingTreeWidget implements ICompositeWidget {
             TreeNode machineNode = new TreeNode(machine, proc.machineLocations(machine), missing);
             addNode(machineNode, depth);
             machineNodes.add(machineNode);
+            procAnchors.putIfAbsent(proc, machineNode);
         }
 
         if (machineNodes.size() > 1) {
@@ -720,7 +833,7 @@ public class CraftingTreeWidget implements ICompositeWidget {
         for (TreeRow row : rows) {
             int rowHeight = row.getHeight();
             if (y + rowHeight >= 0 && y <= scaledHeight) {
-                TreeNode node = row.findNodeAt(treeMouse, offsetX, y);
+                TreeNode node = row.findNodeAt(treeMouse, offsetX + lanePadding, y);
                 if (node != null) {
                     return node;
                 }
@@ -747,6 +860,82 @@ public class CraftingTreeWidget implements ICompositeWidget {
             }
         }
         return null;
+    }
+
+    private void renderFeedbackLines() {
+        var ring = currentRing();
+        if (ring == null || ring.feedback().isEmpty()) {
+            return;
+        }
+        var rowTops = new Reference2IntOpenHashMap<TreeRow>();
+        int y = offsetY;
+        for (TreeRow row : rows) {
+            rowTops.put(row, y);
+            y += row.getHeight();
+        }
+        int rowX = offsetX + lanePadding;
+        int lane = 0;
+        for (var entry : ring.feedback().entrySet()) {
+            TreeNode target = nodeWidgets.get(entry.getKey());
+            TreeNode maker = procAnchors.get(entry.getValue());
+            if (target == null || maker == null) {
+                continue;
+            }
+            int laneX = rowX + NODE_MARGIN_LEFT - 3 - FEEDBACK_LANE * lane++;
+            int makerX = rowX + maker.getPos() + NODE_MARGIN_LEFT;
+            int makerY = rowTops.getInt(maker.row) + maker.marginTop + LINE_HEIGHT;
+            int targetX = rowX + target.getPos() + NODE_MARGIN_LEFT;
+            int targetY = rowTops.getInt(target.row) + target.marginTop + LINE_HEIGHT;
+            var points = new ObjectArrayList<Point>();
+            // Out of the side when nothing is left of it in its row, else from under it
+            if (maker.isLeftmost()) {
+                points.add(new Point(makerX - 2, makerY + NODE_HEIGHT / 2));
+                points.add(new Point(laneX, makerY + NODE_HEIGHT / 2));
+            } else {
+                points.add(new Point(makerX + 3, makerY + NODE_HEIGHT));
+                points.add(new Point(makerX + 3, makerY + NODE_HEIGHT + 1));
+                points.add(new Point(laneX, makerY + NODE_HEIGHT + 1));
+            }
+            // Into the side the same way, or up into it from under it as what it takes comes in
+            if (target.isLeftmost()) {
+                points.add(new Point(laneX, targetY + NODE_HEIGHT / 2));
+                points.add(new Point(targetX - 2, targetY + NODE_HEIGHT / 2));
+            } else {
+                points.add(new Point(laneX, targetY + NODE_HEIGHT + 1));
+                points.add(new Point(targetX + 3, targetY + NODE_HEIGHT + 1));
+                points.add(new Point(targetX + 3, targetY + NODE_HEIGHT));
+            }
+            renderFeedbackLine(points);
+        }
+    }
+
+    private static void renderFeedbackLine(List<Point> points) {
+        GlStateManager.disableDepth();
+        for (int pass = 0; pass < 2; pass++) {
+            int color = pass == 0 ? FEEDBACK_LINE_SHADOW_COLOR : FEEDBACK_LINE_COLOR;
+            int shift = pass == 0 ? 1 : 0;
+            for (int i = 0; i + 1 < points.size(); i++) {
+                Point from = points.get(i);
+                Point to = points.get(i + 1);
+                GuiContainer.drawRect(Math.min(from.x(), to.x()) + shift, Math.min(from.y(), to.y()) + shift,
+                    Math.max(from.x(), to.x()) + 1 + shift, Math.max(from.y(), to.y()) + 1 + shift, color);
+            }
+            // A head where the item arrives
+            Point tip = points.getLast();
+            Point before = points.get(points.size() - 2);
+            int dx = Integer.signum(tip.x() - before.x());
+            int dy = Integer.signum(tip.y() - before.y());
+            for (int k = 1; k <= 2; k++) {
+                int x = tip.x() - dx * k + shift;
+                int y = tip.y() - dy * k + shift;
+                if (dx != 0) {
+                    GuiContainer.drawRect(x, y - k, x + 1, y + k + 1, color);
+                } else {
+                    GuiContainer.drawRect(x - k, y, x + k + 1, y + 1, color);
+                }
+            }
+        }
+        GlStateManager.enableDepth();
     }
 
     private Point toScaledTreeMouse(Point mouse) {
@@ -886,7 +1075,7 @@ public class CraftingTreeWidget implements ICompositeWidget {
             for (TreeRow row : rows) {
                 if (y + row.getHeight() >= 0) {
                     framebuffer.bind(false);
-                    row.renderForScreenshot(new Point(-tileX, y), tileWidth);
+                    row.renderForScreenshot(new Point(lanePadding - tileX, y), tileWidth);
                 }
                 y += row.getHeight();
                 if (y > tileHeight) {
@@ -1147,9 +1336,29 @@ public class CraftingTreeWidget implements ICompositeWidget {
         }
     }
 
+    private static final class RingState {
+        private final CraftingTreeCycleView.Region region;
+        private final Set<LiteCraftTreeNode> unfolded = new ReferenceOpenHashSet<>();
+        private final int savedOffsetX;
+        private final int savedOffsetY;
+        private CraftingTreeCycleView.Ring ring;
+
+        private RingState(CraftingTreeCycleView.Region region, int savedOffsetX, int savedOffsetY) {
+            this.region = region;
+            this.savedOffsetX = savedOffsetX;
+            this.savedOffsetY = savedOffsetY;
+        }
+    }
+
     private final class TreeNode implements RowElement {
         @Nullable
         private final LiteCraftTreeNode node;
+        // The cycle it stands for or enters, the craft it is fed back from, and what is folded into it
+        @Nullable
+        private final CraftingTreeCycleView.Region cycle;
+        private final boolean feedback;
+        @Nullable
+        private final CraftingTreeCycleView.Fold fold;
         @Nullable
         private final PatternContainerGroup machine;
         private final List<CraftingSupplierLocation> machineLocations;
@@ -1176,6 +1385,17 @@ public class CraftingTreeWidget implements ICompositeWidget {
             this.machineLocations = List.of();
             this.junction = false;
             this.missing = LiteCraftTreeNode.isMissing(node);
+            var ring = currentRing();
+            if (ring != null) {
+                this.cycle = ring.nested().get(node);
+                this.feedback = ring.feedback().containsKey(node);
+                this.fold = ring.folds().get(node);
+            } else {
+                var tree = currentContracted();
+                this.cycle = tree == null ? null : tree.cycles().get(node);
+                this.feedback = false;
+                this.fold = null;
+            }
         }
 
         private TreeNode(@Nullable PatternContainerGroup machine, List<CraftingSupplierLocation> machineLocations,
@@ -1185,6 +1405,9 @@ public class CraftingTreeWidget implements ICompositeWidget {
             this.machineLocations = machineLocations;
             this.junction = false;
             this.missing = missing;
+            this.cycle = null;
+            this.feedback = false;
+            this.fold = null;
         }
 
         private TreeNode(boolean missing) {
@@ -1193,6 +1416,9 @@ public class CraftingTreeWidget implements ICompositeWidget {
             this.machineLocations = List.of();
             this.junction = true;
             this.missing = missing;
+            this.cycle = null;
+            this.feedback = false;
+            this.fold = null;
         }
 
         @Override
@@ -1236,6 +1462,7 @@ public class CraftingTreeWidget implements ICompositeWidget {
                 renderBackground(position);
                 renderIcon(position.move(ITEM_RENDER_OFFSET, LINE_HEIGHT + ITEM_RENDER_OFFSET));
                 renderMissingOverlay(position);
+                renderCycleOverlay(position);
             }
             renderLinks(position);
             if (updateHover && countsAsNode()) {
@@ -1247,7 +1474,8 @@ public class CraftingTreeWidget implements ICompositeWidget {
             GlStateManager.enableBlend();
             GlStateManager.blendFunc(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA);
             Icon background = selected ? Icon.CRAFTING_TREE_NODE_SELECTED :
-                (missing ? Icon.CRAFTING_TREE_NODE_MISSING : Icon.CRAFTING_TREE_NODE_NORMAL);
+                missing ? Icon.CRAFTING_TREE_NODE_MISSING :
+                    cycle != null ? Icon.CRAFTING_TREE_NODE_CYCLE : Icon.CRAFTING_TREE_NODE_NORMAL;
             drawIcon(position.x(), position.y() + LINE_HEIGHT, background);
         }
 
@@ -1260,6 +1488,27 @@ public class CraftingTreeWidget implements ICompositeWidget {
                 drawIcon(position.x(), position.y() + LINE_HEIGHT, Icon.CRAFTING_TREE_MISSING_OVERLAY);
                 GlStateManager.enableDepth();
             }
+        }
+
+        private void renderCycleOverlay(Point position) {
+            Icon overlay = cycle != null ? Icon.CRAFTING_TREE_CYCLE
+                : feedback ? Icon.CRAFTING_TREE_FEEDBACK
+                : fold != null ? Icon.CRAFTING_TREE_FOLDED : null;
+            if (overlay == null) {
+                return;
+            }
+            GlStateManager.disableDepth();
+            drawIcon(position.x(), position.y() + LINE_HEIGHT, overlay);
+            GlStateManager.enableDepth();
+        }
+
+        private boolean isLeftmost() {
+            for (RowElement element : row.widgets) {
+                if (element instanceof TreeNode other && other != this && !other.junction && other.getPos() < getPos()) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private void renderIcon(Point position) {
@@ -1449,6 +1698,18 @@ public class CraftingTreeWidget implements ICompositeWidget {
             }
             if (output.amount() >= 10000) {
                 lines.add(new TextComponentString(CraftingTreeNumberFormat.formatDecimal(output.amount())));
+            }
+            if (cycle != null) {
+                lines.add(new TextComponentString(isInRing()
+                    ? GuiText.CraftingTreeCycleNested.getLocal()
+                    : GuiText.CraftingTreeCycle.getLocal(cycle.crafts(), cycle.feedbacks())));
+                lines.add(GuiText.CraftingTreeCycleOpen.text());
+            }
+            if (feedback) {
+                lines.add(GuiText.CraftingTreeFeedback.text());
+            }
+            if (fold != null) {
+                lines.add(new TextComponentString(GuiText.CraftingTreeFolded.getLocal(fold.crafts())));
             }
 
             return new Tooltip(lines);

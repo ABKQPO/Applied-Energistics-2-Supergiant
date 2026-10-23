@@ -7,12 +7,16 @@ import ae2.api.stacks.GenericStack;
 import ae2.crafting.CraftingCalculation;
 import ae2.helpers.patternprovider.PseudoPatternDetails;
 import com.google.common.math.LongMath;
+import it.unimi.dsi.fastutil.objects.Object2DoubleMap;
+import it.unimi.dsi.fastutil.objects.Object2DoubleOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2LongLinkedOpenHashMap;
+import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public class GraphBuilder {
@@ -22,10 +26,72 @@ public class GraphBuilder {
     private long emitLookupNanos;
     private long nodeCount;
     private final Set<AEKey> substituteClosureVisited = new ObjectOpenHashSet<>();
+    private final Map<AEKey, IPatternDetails> choices;
 
     public GraphBuilder(CraftingCalculation calc) {
+        this(calc, Map.of());
+    }
+
+    /**
+     * Builds the graph with the given pattern of each key instead of the one of highest priority.
+     */
+    public GraphBuilder(CraftingCalculation calc, Map<AEKey, IPatternDetails> choices) {
         this.calc = calc;
         this.trackPerformance = calc.isPerformanceTrackingEnabled();
+        this.choices = choices;
+    }
+
+    /**
+     * For each key reachable from the output, the pattern needing the least of the scarce keys per item it makes. On a
+     * tie, the one of highest priority. Only patterns the graph can plan natively are chosen.
+     */
+    public Map<AEKey, IPatternDetails> choosePatterns(AEKey output, Object2DoubleMap<AEKey> scarcity)
+        throws InterruptedException {
+        var chosen = new Object2ObjectOpenHashMap<AEKey, IPatternDetails>();
+        price(output, scarcity, new Object2DoubleOpenHashMap<>(), chosen);
+        return chosen;
+    }
+
+    private double price(AEKey what, Object2DoubleMap<AEKey> scarcity, Object2DoubleOpenHashMap<AEKey> prices,
+                         Map<AEKey, IPatternDetails> chosen) throws InterruptedException {
+        if (prices.containsKey(what)) {
+            return prices.getDouble(what);
+        }
+        double own = scarcity.getDouble(what);
+        if (calc.canEmitFor(what)) {
+            prices.put(what, 0);
+            return 0;
+        }
+        var patterns = calc.getCraftingFor(what);
+        // A cycle back to the key is priced as free, so cycles alone never change the choice
+        prices.put(what, 0);
+        calc.handlePausing();
+        var primary = patterns.isEmpty() ? null : patterns.getFirst();
+        IPatternDetails bestPattern = primary;
+        double best = Double.POSITIVE_INFINITY;
+        for (var pattern : patterns) {
+            if (pattern != primary && !isNativePattern(pattern)) continue;
+            long made = candidateOutputAmount(what, pattern);
+            if (made <= 0) continue;
+            double cost = 0;
+            for (var input : pattern.getInputs()) {
+                var possible = input.possibleInputs();
+                if (possible.length == 0 || input.getMultiplier() <= 0) continue;
+                double amount = (double) possible[0].amount() * input.getMultiplier();
+                cost += amount * price(possible[0].what(), scarcity, prices, chosen);
+            }
+            cost /= made;
+            if (cost < best) {
+                best = cost;
+                bestPattern = pattern;
+            }
+        }
+        if (bestPattern != primary) {
+            chosen.put(what, bestPattern);
+        }
+        double result = best == Double.POSITIVE_INFINITY ? own : own + best;
+        prices.put(what, result);
+        return result;
     }
 
     public CraftingGraph buildGraph(AEKey output, long requestedAmount) throws InterruptedException {
@@ -98,10 +164,15 @@ public class GraphBuilder {
             }
             return null;
         }
-        boolean localUnit = patterns.size() != 1;
-        String localReason = localUnit ? "multiple-pattern-candidates" : null;
+        // With several patterns, the graph is planned with the one of highest priority first, see
+        // CraftingCalculation#tryAlternatives
+        boolean localUnit = false;
+        String localReason = null;
+        if (patterns.size() != 1) {
+            graph.markAlternatives();
+        }
 
-        var primaryPattern = patterns.getFirst();
+        var primaryPattern = this.choices.getOrDefault(what, patterns.getFirst());
         for (var pattern : patterns) {
             graph.recordPatternDefinition(pattern.getDefinition());
         }
@@ -137,9 +208,11 @@ public class GraphBuilder {
         calc.handlePausing();
 
         var graphInputs = new Object2LongLinkedOpenHashMap<AEKey>();
-        var patternsToScan = localUnit ? patterns : List.of(primaryPattern);
-        var candidates = new ObjectArrayList<MaterialClosure.Candidate>(patternsToScan.size());
-        for (var pattern : patternsToScan) {
+        // The closure keeps the inputs of every candidate, the graph only those of the patterns it plans with
+        var closureInputs = new Object2LongLinkedOpenHashMap<AEKey>();
+        var candidates = new ObjectArrayList<MaterialClosure.Candidate>(patterns.size());
+        for (var pattern : patterns) {
+            boolean planned = localUnit || pattern == primaryPattern;
             var patternInputs = new Object2LongLinkedOpenHashMap<AEKey>();
             for (var inputEntry : pattern.getInputs()) {
                 var possibleInputs = inputEntry.possibleInputs();
@@ -164,14 +237,19 @@ public class GraphBuilder {
             // A local unit is previewed with one selected pattern. Keep the largest per-key demand
             // across candidates, while still summing repeated slots within the same candidate.
             for (var input : patternInputs.object2LongEntrySet()) {
-                graphInputs.put(input.getKey(), Math.max(graphInputs.getLong(input.getKey()), input.getLongValue()));
+                closureInputs.put(input.getKey(),
+                    Math.max(closureInputs.getLong(input.getKey()), input.getLongValue()));
+                if (planned) {
+                    graphInputs.put(input.getKey(),
+                        Math.max(graphInputs.getLong(input.getKey()), input.getLongValue()));
+                }
             }
             long candidateOutput = pattern == primaryPattern ? outputAmount : candidateOutputAmount(what, pattern);
             if (candidateOutput > 0) {
                 candidates.add(new MaterialClosure.Candidate(candidateOutput, copyInputs(patternInputs)));
             }
         }
-        graph.addClosureNode(what, new MaterialClosure.Node(false, null, copyInputs(graphInputs), candidates));
+        graph.addClosureNode(what, new MaterialClosure.Node(false, null, copyInputs(closureInputs), candidates));
 
         for (var graphInput : graphInputs.object2LongEntrySet()) {
             var inputKey = graphInput.getKey();
@@ -185,6 +263,13 @@ public class GraphBuilder {
 
             if (childNode != null) {
                 childNode.addParent(node);
+            }
+        }
+
+        // Material only the other patterns take still belongs in the snapshot and the closure, without nodes
+        for (var closureInput : closureInputs.keySet()) {
+            if (!graphInputs.containsKey(closureInput) && !graph.getClosureNodes().containsKey(closureInput)) {
+                collectSubstituteClosure(closureInput, graph);
             }
         }
 

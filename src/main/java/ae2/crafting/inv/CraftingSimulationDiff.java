@@ -21,29 +21,44 @@ public final class CraftingSimulationDiff {
     CraftingSimulationDiff(KeyCounter requiredExtract, KeyCounter inventoryDelta,
                            KeyCounter emittedItems, KeyCounter pseudoItems,
                            Object2LongMap<IPatternDetails> crafts, double bytes) {
-        this.requiredExtract = copy(requiredExtract);
-        this.inventoryDelta = copy(inventoryDelta);
-        this.emittedItems = copy(emittedItems);
-        this.pseudoItems = copy(pseudoItems);
-        this.crafts = new Object2LongOpenHashMap<>(crafts);
+        this(copy(requiredExtract), copy(inventoryDelta), copy(emittedItems), copy(pseudoItems),
+            new Object2LongOpenHashMap<>(crafts), bytes, true);
+    }
+
+    private CraftingSimulationDiff(KeyCounter requiredExtract, KeyCounter inventoryDelta,
+                                   KeyCounter emittedItems, KeyCounter pseudoItems,
+                                   Object2LongMap<IPatternDetails> crafts, double bytes, boolean ignored) {
+        this.requiredExtract = requiredExtract;
+        this.inventoryDelta = inventoryDelta;
+        this.emittedItems = emittedItems;
+        this.pseudoItems = pseudoItems;
+        this.crafts = crafts;
         this.bytes = bytes;
+    }
+
+    /**
+     * A diff over the given counters as they are, for one that is applied right away: the state it comes from is
+     * discarded or no longer read, so copying counters as large as its whole subtree is not needed.
+     */
+    static CraftingSimulationDiff shared(KeyCounter requiredExtract, KeyCounter inventoryDelta,
+                                         KeyCounter emittedItems, KeyCounter pseudoItems,
+                                         Object2LongMap<IPatternDetails> crafts, double bytes) {
+        return new CraftingSimulationDiff(requiredExtract, inventoryDelta, emittedItems, pseudoItems, crafts, bytes,
+            true);
     }
 
     public void applyTo(CraftingSimulationState parent) {
         if (this.applied) {
             throw new IllegalStateException("Crafting simulation diff was already applied");
         }
-        var snapshot = parent.snapshot();
-        try {
-            if (!canApplyTo(parent)) {
-                throw new IllegalStateException("Crafting simulation diff cannot be applied to parent");
-            }
-            parent.applyDiff(this);
-            this.applied = true;
-        } catch (RuntimeException | Error failure) {
-            parent.restore(snapshot);
-            throw failure;
+        if (!canApplyTo(parent)) {
+            throw new IllegalStateException("Crafting simulation diff cannot be applied to parent");
         }
+        // No copy of the parent to roll back: once the check above passed, applying can only fail on an internal
+        // error, which aborts the whole calculation, and the copy made every applied diff cost as much as the entire
+        // simulation state.
+        parent.applyDiff(this);
+        this.applied = true;
     }
 
     public boolean canApplyTo(CraftingSimulationState parent) {

@@ -191,7 +191,7 @@ public class CraftingTreeNode {
             }
             if (this.job.canUseMissingItems()) {
                 throw new CraftBranchFailure(this.what, totalRequestedItems,
-                    PlayerMessages.CraftingNoNetOutput);
+                    PlayerMessages.CraftingNoNetOutput, this.job.describeCycle(this.what));
             }
             throw new CraftBranchFailure(this.what, totalRequestedItems);
         }
@@ -217,7 +217,7 @@ public class CraftingTreeNode {
                 long craftTimes = divideCeil(getTotalRequestedItems(requestedAmount),
                     primaryPattern.getPrimaryOutput().amount());
                 var scaled = bundle.scale(craftTimes);
-                if (scaled.isSatisfiable(inv)) {
+                if (scaled != null && scaled.isSatisfiable(inv)) {
                     applyBundle(scaled, inv, containerItems);
                     return;
                 }
@@ -226,13 +226,16 @@ public class CraftingTreeNode {
 
         var memoKey = CraftingCalculation.MemoKey.create(this.what, this.job);
         var cached = this.job.getMemoResult(memoKey);
-        if (cached != null && cached.isApplicable(inv)) {
+        if (cached != null && cached.multiplierFor(requestedAmount) > 0
+            && cached.isApplicable(inv, cached.multiplierFor(requestedAmount))) {
             applyMemoResult(cached, inv, containerItems, requestedAmount);
             return;
         }
 
-        MemoSnapshot snapshot = MemoSnapshot.capture(inv, this.job);
+        MemoSnapshot snapshot = this.job.isMemoRecording() ? MemoSnapshot.capture(inv, this.job) : null;
         MemoRecorder recorder = new MemoRecorder();
+        // The amount below is reduced by what storage covers; a result is recorded for the whole request
+        final long requested = requestedAmount;
 
         inv.addStackBytes(what, amount, requestedAmount);
 
@@ -259,8 +262,7 @@ public class CraftingTreeNode {
                         LongMath.saturatedMultiply(extracted, template.amount()));
 
                     if (requestedAmount == 0) {
-                        var result = recorder.build(snapshot, inv, this.job, requestedAmount);
-                        this.job.putMemoResult(memoKey, result);
+                        recordMemo(memoKey, recorder, snapshot, inv, requested);
                         return;
                     }
                 }
@@ -285,8 +287,7 @@ public class CraftingTreeNode {
                     }
 
                     if (requestedAmount == 0) {
-                        var result = recorder.build(snapshot, inv, this.job, requestedAmount);
-                        this.job.putMemoResult(memoKey, result);
+                        recordMemo(memoKey, recorder, snapshot, inv, requested);
                         return;
                     }
                 }
@@ -306,8 +307,7 @@ public class CraftingTreeNode {
          */
         if (this.canEmit) {
             inv.emitItems(this.what, getTotalRequestedItems(requestedAmount));
-            var result = recorder.build(snapshot, inv, this.job, requestedAmount);
-            this.job.putMemoResult(memoKey, result);
+            recordMemo(memoKey, recorder, snapshot, inv, requested);
             return;
         }
 
@@ -325,16 +325,14 @@ public class CraftingTreeNode {
                 }
             }
             if (totalRequestedItems <= 0) {
-                var result = recorder.build(snapshot, inv, this.job, requestedAmount);
-                this.job.putMemoResult(memoKey, result);
+                recordMemo(memoKey, recorder, snapshot, inv, requested);
                 return;
             }
         }
 
         if (totalRequestedItems > 0 && this.job.canUseMissingItems() && !this.nodes.isEmpty()) {
             requestMissingBranches(inv, totalRequestedItems);
-            var result = recorder.build(snapshot, inv, this.job, requestedAmount);
-            this.job.putMemoResult(memoKey, result);
+            recordMemo(memoKey, recorder, snapshot, inv, requested);
             return;
         }
 
@@ -346,16 +344,27 @@ public class CraftingTreeNode {
             }
         }
 
-        var result = recorder.build(snapshot, inv, this.job, requestedAmount);
-        this.job.putMemoResult(memoKey, result);
+        var result = recordMemo(memoKey, recorder, snapshot, inv, requested);
 
-        if (primaryPattern != null && requestedAmount > 0) {
-            long craftTimes = divideCeil(getTotalRequestedItems(requestedAmount),
+        if (result != null && primaryPattern != null && requested > 0) {
+            long craftTimes = divideCeil(getTotalRequestedItems(requested),
                 primaryPattern.getPrimaryOutput().amount());
             var bundle = result.toBundle(craftTimes);
             var bundleKey = new CraftingCalculation.BundleKey(this.what, primaryPattern);
             this.job.putBundle(bundleKey, bundle);
         }
+    }
+
+    private CraftingCalculation.@Nullable MemoResult recordMemo(CraftingCalculation.MemoKey memoKey,
+                                                                MemoRecorder recorder,
+                                                                @Nullable MemoSnapshot snapshot,
+                                                                CraftingSimulationState inv, long requestedAmount) {
+        if (snapshot == null) {
+            return null;
+        }
+        var result = recorder.build(snapshot, inv, this.job, requestedAmount);
+        this.job.putMemoResult(memoKey, result);
+        return result;
     }
 
     private void requestMissingBranches(CraftingSimulationState inv, long totalRequestedItems)
@@ -383,14 +392,27 @@ public class CraftingTreeNode {
 
         while (totalRequestedItems > 0) {
             long times = getRequestedPatternTimes(pro, totalRequestedItems, craftedPerPattern, recursiveBatch);
-            if (this.job.isPerformanceTrackingEnabled()) {
-                this.job.runTimedCrafting("request-missing-branch " + this.what, () -> pro.request(inv, times));
-            } else {
-                pro.request(inv, times);
+            var marker = this.job.createCalculationMarker();
+            var child = new ChildCraftingSimulationState(inv);
+            try {
+                if (this.job.isPerformanceTrackingEnabled()) {
+                    this.job.runTimedCrafting("request-missing-branch " + this.what, () -> pro.request(child, times));
+                } else {
+                    pro.request(child, times);
+                }
+            } catch (CraftBranchFailure failure) {
+                // A cycle below that cannot make an item only leaves this item missing. A request that can only come
+                // out of such a cycle still fails, see CraftingTreeNode#request.
+                if (failure.getWhat().equals(this.job.getOutput())) {
+                    throw failure;
+                }
+                this.job.restoreCalculationMarker(marker);
+                this.job.addMissing(this.what, totalRequestedItems);
+                return;
             }
+            child.applyDiff(inv);
             pro.addTreeRequestTimes(times);
 
-            // by now we have succeeded, as request throws an exception in case of failure
             // check how much was actually produced
             var available = extractCraftedBranchOutput(inv, totalRequestedItems);
             if (available != 0) {
@@ -869,10 +891,7 @@ public class CraftingTreeNode {
 
     private void applyMemoResult(CraftingCalculation.MemoResult cached, CraftingSimulationState inv,
                                  @Nullable KeyCounter containerItems, long requestedAmount) throws CraftBranchFailure {
-        long multiplier = 1;
-        if (cached.baseTimes > 0) {
-            multiplier = divideCeil(requestedAmount, cached.baseTimes);
-        }
+        long multiplier = cached.multiplierFor(requestedAmount);
 
         for (var entry : cached.insertedItems) {
             inv.insert(entry.getKey(), entry.getLongValue() * multiplier, Actionable.MODULATE);
@@ -1002,11 +1021,25 @@ public class CraftingTreeNode {
                 result.recordContainerItem(entry.getKey(), entry.getLongValue());
             }
 
-            for (var entry : inv.getExtractedItems()) {
-                long before = snapshot.snapshotExtracted.get(entry.getKey());
-                long delta = entry.getLongValue() - before;
+            // The net change of the inventory: extracted items are not only what the parent supplied beyond its
+            // previous peak, and keys first loaded by this request were not inserted by it
+            var inventoryDelta = inv.getInventoryDelta();
+            for (var entry : inventoryDelta) {
+                long delta = entry.getLongValue() - snapshot.snapshotInventoryDelta.get(entry.getKey());
                 if (delta > 0) {
-                    result.recordExtraction(entry.getKey(), delta);
+                    result.recordInserted(entry.getKey(), delta);
+                } else if (delta < 0) {
+                    result.recordExtraction(entry.getKey(), -delta);
+                }
+            }
+            for (var entry : snapshot.snapshotInventoryDelta) {
+                if (inventoryDelta.get(entry.getKey()) == 0 && entry.getLongValue() != 0) {
+                    long delta = -entry.getLongValue();
+                    if (delta > 0) {
+                        result.recordInserted(entry.getKey(), delta);
+                    } else {
+                        result.recordExtraction(entry.getKey(), -delta);
+                    }
                 }
             }
 
@@ -1039,13 +1072,6 @@ public class CraftingTreeNode {
                 }
             }
 
-            for (var entry : inv.getModifiableCache()) {
-                long before = snapshot.snapshotModifiable.get(entry.getKey());
-                long delta = entry.getLongValue() - before;
-                if (delta > 0) {
-                    result.recordInserted(entry.getKey(), delta);
-                }
-            }
 
             for (var entry : job.getMissingItems()) {
                 long before = snapshot.snapshotMissing.get(entry.getKey());
@@ -1118,12 +1144,11 @@ public class CraftingTreeNode {
         }
     }
 
-    private record MemoSnapshot(KeyCounter snapshotExtracted,
+    private record MemoSnapshot(KeyCounter snapshotInventoryDelta,
                                 Reference2LongOpenHashMap<IPatternDetails> snapshotCrafts,
                                 double snapshotBytes,
                                 KeyCounter snapshotEmitted,
                                 KeyCounter snapshotPseudo,
-                                KeyCounter snapshotModifiable,
                                 KeyCounter snapshotMissing,
                                 long snapshotIntermediateFinalOutput,
                                 KeyCounter snapshotRecursiveMissingSeeds,
@@ -1133,8 +1158,7 @@ public class CraftingTreeNode {
                                 Reference2LongOpenHashMap<CraftingTreeNode> snapshotRecursiveDisplayRequests) {
 
         static MemoSnapshot capture(CraftingSimulationState inv, CraftingCalculation job) {
-            var snapshotExtracted = new KeyCounter();
-            snapshotExtracted.addAll(inv.getExtractedItems());
+            var snapshotInventoryDelta = inv.getInventoryDelta();
             var snapshotCrafts = new Reference2LongOpenHashMap<IPatternDetails>();
             snapshotCrafts.putAll(inv.getCrafts());
             double snapshotBytes = inv.getBytes();
@@ -1143,8 +1167,6 @@ public class CraftingTreeNode {
             snapshotEmitted.addAll(inv.getEmittedItems());
             var snapshotPseudo = new KeyCounter();
             snapshotPseudo.addAll(inv.getPseudoItems());
-            var snapshotModifiable = new KeyCounter();
-            snapshotModifiable.addAll(inv.getModifiableCache());
             var snapshotMissing = new KeyCounter();
             snapshotMissing.addAll(job.getMissingItems());
 
@@ -1157,8 +1179,8 @@ public class CraftingTreeNode {
             var snapshotRecursiveDisplayRequests = new Reference2LongOpenHashMap<CraftingTreeNode>();
             snapshotRecursiveDisplayRequests.putAll(job.getRecursiveDisplayRequestsMarker());
 
-            return new MemoSnapshot(snapshotExtracted, snapshotCrafts, snapshotBytes,
-                snapshotEmitted, snapshotPseudo, snapshotModifiable, snapshotMissing,
+            return new MemoSnapshot(snapshotInventoryDelta, snapshotCrafts, snapshotBytes,
+                snapshotEmitted, snapshotPseudo, snapshotMissing,
                 snapshotIntermediateFinalOutput, snapshotRecursiveMissingSeeds,
                 snapshotRealSeededRecursiveRequests, snapshotRealRecursiveSeeds,
                 snapshotRealSeededRecursiveKeys, snapshotRecursiveDisplayRequests);

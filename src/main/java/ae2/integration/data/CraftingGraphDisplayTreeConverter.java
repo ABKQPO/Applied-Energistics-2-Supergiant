@@ -5,6 +5,7 @@ import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 import ae2.crafting.graph.CraftingGraphDisplaySnapshot;
 import ae2.crafting.graph.LocalDisplayFragment;
+import com.google.common.math.LongMath;
 import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
@@ -133,6 +134,9 @@ public final class CraftingGraphDisplayTreeConverter {
             if (edge.extractedExternal() + edge.missing() > 0) {
                 count++;
             }
+            if (isFeedback(edge)) {
+                count++;
+            }
         }
         return count;
     }
@@ -141,6 +145,9 @@ public final class CraftingGraphDisplayTreeConverter {
                                           ArrayDeque<BudgetTask> pending) {
         for (int edgeIndex = edges.size() - 1; edgeIndex >= 0; edgeIndex--) {
             var edge = edges.get(edgeIndex);
+            if (isFeedback(edge)) {
+                pending.push(new LeafNodeBudgetTask(edge.inputKey(), depth));
+            }
             if (edge.extractedExternal() + edge.missing() > 0) {
                 pending.push(new LeafNodeBudgetTask(edge.inputKey(), depth));
             }
@@ -148,6 +155,12 @@ public final class CraftingGraphDisplayTreeConverter {
                 pending.push(new GraphNodeBudgetTask(edge.producerIndex(), depth));
             }
         }
+    }
+
+    // What a cycle takes back from a craft above it: not in the tree as the producer's child, so it is shown as an
+    // input of its own, linked to that craft by CraftingTreeCycles
+    private static boolean isFeedback(CraftingGraphDisplaySnapshot.Edge edge) {
+        return edge.cycleCut() && edge.producerIndex() >= 0 && edge.amountPerCraft() > 0;
     }
 
     private sealed interface BudgetTask permits GraphNodeBudgetTask, LocalNodeBudgetTask, LeafNodeBudgetTask {
@@ -241,8 +254,8 @@ public final class CraftingGraphDisplayTreeConverter {
         try {
             var processes = new ObjectArrayList<LiteCraftTreeProc>();
             if (node.localDisplay() != null) {
-                appendLocalProcesses(node.localDisplay(), processes, node.inputs(), snapshot, path, materializedProcesses,
-                    missingAllocator);
+                appendLocalProcesses(node.localDisplay(), processes, node.inputs(), node.craftTimes(), snapshot, path,
+                    materializedProcesses, missingAllocator);
                 if (processes.isEmpty()) appendGraphProcess(node, processes, snapshot, path, materializedProcesses,
                     missingAllocator);
             } else {
@@ -271,19 +284,20 @@ public final class CraftingGraphDisplayTreeConverter {
                                            CraftingGraphDisplaySnapshot snapshot,
                                            BitSet path, BitSet materialized, MissingAllocator missingAllocator) {
         var children = new ObjectArrayList<LiteCraftTreeNode>(node.inputs().size());
-        var process = new LiteCraftTreeProc(children, node.machines(), node.machineLocations());
-        appendEdges(node.inputs(), children, process, snapshot, path, materialized, missingAllocator);
+        var process = new LiteCraftTreeProc(children, node.machines(), node.machineLocations(), node.pattern(), -1);
+        appendEdges(node.inputs(), node.craftTimes(), children, process, snapshot, path, materialized,
+            missingAllocator);
         if (!children.isEmpty()) processes.add(process);
     }
 
     private static void appendLocalProcesses(LocalDisplayFragment fragment,
                                              List<LiteCraftTreeProc> processes,
-                                             List<CraftingGraphDisplaySnapshot.Edge> edges,
+                                             List<CraftingGraphDisplaySnapshot.Edge> edges, long craftTimes,
                                              CraftingGraphDisplaySnapshot snapshot,
                                              BitSet path, BitSet materialized, MissingAllocator missingAllocator) {
         for (var local : fragment.processes()) {
             var children = new ObjectArrayList<LiteCraftTreeNode>(local.inputs().size());
-            var process = new LiteCraftTreeProc(children, local.machines(), local.locations());
+            var process = new LiteCraftTreeProc(children, local.machines(), local.locations(), local.pattern(), -1);
             for (var child : local.inputs()) {
                 children.add(materializeLocal(child, process, missingAllocator));
             }
@@ -294,7 +308,7 @@ public final class CraftingGraphDisplayTreeConverter {
         if (snapshot != null) {
             var children = new ObjectArrayList<LiteCraftTreeNode>();
             var boundaryProcess = new LiteCraftTreeProc(children, List.of(), Map.of());
-            appendEdges(edges, children, boundaryProcess, snapshot, path, materialized, missingAllocator);
+            appendEdges(edges, craftTimes, children, boundaryProcess, snapshot, path, materialized, missingAllocator);
             if (!children.isEmpty()) {
                 processes.add(boundaryProcess);
             }
@@ -304,12 +318,12 @@ public final class CraftingGraphDisplayTreeConverter {
     private static LiteCraftTreeNode materializeLocal(LocalDisplayFragment fragment, LiteCraftTreeProc parent,
                                                       MissingAllocator missingAllocator) {
         var processes = new ObjectArrayList<LiteCraftTreeProc>();
-        appendLocalProcesses(fragment, processes, List.of(), null, new BitSet(), new BitSet(), missingAllocator);
+        appendLocalProcesses(fragment, processes, List.of(), 0, null, new BitSet(), new BitSet(), missingAllocator);
         return new LiteCraftTreeNode(parent, new GenericStack(fragment.output(), fragment.amount()), processes,
             missingAllocator.allocate(fragment.output(), fragment.missing()));
     }
 
-    private static void appendEdges(List<CraftingGraphDisplaySnapshot.Edge> edges,
+    private static void appendEdges(List<CraftingGraphDisplaySnapshot.Edge> edges, long craftTimes,
                                     List<LiteCraftTreeNode> children, LiteCraftTreeProc process,
                                     CraftingGraphDisplaySnapshot snapshot, BitSet path, BitSet materialized,
                                     MissingAllocator missingAllocator) {
@@ -317,6 +331,11 @@ public final class CraftingGraphDisplayTreeConverter {
             if (edge.producerIndex() >= 0 && edge.allocatedOutput() > 0) {
                 children.add(materialize(snapshot, edge.producerIndex(), process,
                     edge.allocatedOutput(), path, materialized, missingAllocator));
+            }
+            if (isFeedback(edge) && craftTimes > 0) {
+                long fedBack = LongMath.saturatedMultiply(edge.amountPerCraft(), craftTimes);
+                children.add(new LiteCraftTreeNode(process, new GenericStack(edge.inputKey(), fedBack), List.of(), 0,
+                    LiteCraftTreeNode.FEEDBACK_PENDING));
             }
             long terminalAmount = edge.extractedExternal() + edge.missing();
             if (terminalAmount > 0) {

@@ -35,15 +35,8 @@ import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Collections;
-import java.util.RandomAccess;
 
 public abstract class CraftingSimulationState implements ICraftingSimulationState {
-    record StateSnapshot(KeyCounter unmodifiedCache, KeyCounter modifiableCache,
-                         ReferenceOpenHashSet<Object> loadedFuzzyGroups, KeyCounter emittedItems,
-                         KeyCounter pseudoItems, KeyCounter boundaryItems, KeyCounter requiredExtract,
-                         Object2LongOpenHashMap<IPatternDetails> crafts, double bytes) {
-    }
-
     /**
      * Partial cache of the parent's items, never modified.
      */
@@ -268,23 +261,32 @@ public abstract class CraftingSimulationState implements ICraftingSimulationStat
         return returned;
     }
 
-    public long getCraftedAmount(AEKey what) {
+    /**
+     * Amount of the key the planned crafts produce beyond what they consume themselves. A catalyst a pattern gives back
+     * is not produced: it has to exist before the first craft.
+     */
+    public long getNetCraftedAmount(AEKey what) {
         long amount = 0;
         for (Object2LongMap.Entry<IPatternDetails> entry : this.crafts.object2LongEntrySet()) {
-            var outputs = entry.getKey().getOutputs();
-            if (outputs instanceof RandomAccess) {
-                for (int i = 0, size = outputs.size(); i < size; i++) {
-                    var output = outputs.get(i);
-                    if (what.matches(output)) {
-                        amount += output.amount() * entry.getLongValue();
-                    }
+            var pattern = entry.getKey();
+            long net = 0;
+            for (var output : pattern.getOutputs()) {
+                if (what.matches(output)) {
+                    net = LongMath.saturatedAdd(net, output.amount());
                 }
-            } else {
-                for (var output : outputs) {
-                    if (what.matches(output)) {
-                        amount += output.amount() * entry.getLongValue();
-                    }
+            }
+            if (net <= 0) {
+                continue;
+            }
+            for (var input : pattern.getInputs()) {
+                var possibleInputs = input.possibleInputs();
+                if (possibleInputs.length > 0 && what.matches(possibleInputs[0])) {
+                    net = LongMath.saturatedSubtract(net,
+                        LongMath.saturatedMultiply(possibleInputs[0].amount(), input.getMultiplier()));
                 }
+            }
+            if (net > 0) {
+                amount = LongMath.saturatedAdd(amount, LongMath.saturatedMultiply(net, entry.getLongValue()));
             }
         }
         return amount;
@@ -297,10 +299,20 @@ public abstract class CraftingSimulationState implements ICraftingSimulationStat
     }
 
     public void applyDiff(CraftingSimulationState parent) {
-        freezeDiff().applyTo(parent);
+        // Applied right away, so the diff does not need copies of this state
+        CraftingSimulationDiff.shared(requiredExtract, getInventoryDelta(), emittedItems, pseudoItems, crafts, bytes)
+            .applyTo(parent);
     }
 
     public CraftingSimulationDiff freezeDiff() {
+        return new CraftingSimulationDiff(requiredExtract, getInventoryDelta(), emittedItems, pseudoItems, crafts,
+            bytes);
+    }
+
+    /**
+     * How much of each key this state holds more or less than its parent.
+     */
+    public KeyCounter getInventoryDelta() {
         var inventoryDelta = new KeyCounter();
         for (var entry : modifiableCache) {
             long delta = entry.getLongValue() - unmodifiedCache.get(entry.getKey());
@@ -308,46 +320,7 @@ public abstract class CraftingSimulationState implements ICraftingSimulationStat
                 inventoryDelta.add(entry.getKey(), delta);
             }
         }
-        return new CraftingSimulationDiff(requiredExtract, inventoryDelta, emittedItems, pseudoItems, crafts, bytes);
-    }
-
-    StateSnapshot snapshot() {
-        return new StateSnapshot(
-            copy(unmodifiedCache),
-            copy(modifiableCache),
-            new ReferenceOpenHashSet<>(loadedFuzzyGroups),
-            copy(emittedItems),
-            copy(pseudoItems),
-            copy(boundaryItems),
-            copy(requiredExtract),
-            new Object2LongOpenHashMap<>(crafts),
-            bytes);
-    }
-
-    void restore(StateSnapshot snapshot) {
-        restore(unmodifiedCache, snapshot.unmodifiedCache());
-        restore(modifiableCache, snapshot.modifiableCache());
-        loadedFuzzyGroups.clear();
-        loadedFuzzyGroups.addAll(snapshot.loadedFuzzyGroups());
-        restore(emittedItems, snapshot.emittedItems());
-        restore(pseudoItems, snapshot.pseudoItems());
-        restore(boundaryItems, snapshot.boundaryItems());
-        restore(requiredExtract, snapshot.requiredExtract());
-        crafts.clear();
-        crafts.putAll(snapshot.crafts());
-        bytes = snapshot.bytes();
-    }
-
-    private static KeyCounter copy(KeyCounter source) {
-        var result = new KeyCounter();
-        result.addAll(source);
-        return result;
-    }
-
-    private static void restore(KeyCounter target, KeyCounter snapshot) {
-        target.clear();
-        target.removeEmptySubmaps();
-        target.addAll(snapshot);
+        return inventoryDelta;
     }
 
     void applyDiff(CraftingSimulationDiff diff) {

@@ -684,7 +684,15 @@ public class ContainerCraftConfirm extends AEBaseContainer implements ISubGui {
         this.setValidContainer(false);
         this.cancelPendingCalculations();
         ITextComponent error = getCraftingErrorText(failure);
-        this.getPlayerInventory().player.sendMessage(PlayerMessages.CraftingJobError.text(error));
+        var player = this.getPlayerInventory().player;
+        player.sendMessage(PlayerMessages.CraftingJobError.text(error));
+        Throwable cause = failure instanceof ExecutionException && failure.getCause() != null
+            ? failure.getCause() : failure;
+        if (cause instanceof CraftingCalculationFailure calculationFailure && calculationFailure.getCycle() != null) {
+            for (var line : calculationFailure.getCycle().describe()) {
+                player.sendMessage(line);
+            }
+        }
         AELog.error(failure, "Failed to finish crafting calculation");
     }
 

@@ -71,6 +71,18 @@ public final class CraftingPlan implements ICraftingPlan, TemporaryProviderCarri
             tree, graphDisplayBuilder, attemptMetrics, calculation);
     }
 
+    /**
+     * The same plan with other contents, for a plan repaired after the calculation. Its crafting tree is still the one
+     * calculated: the tree screen shows the crafts the way they were found, its amounts held to the repaired ones
+     * where the tree is allocated by them.
+     */
+    CraftingPlan withContents(KeyCounter usedItems, KeyCounter emittedItems, KeyCounter missingItems,
+                              Object2LongMap<IPatternDetails> patternTimes, CraftingCalculation calculation) {
+        return new CraftingPlan(finalOutput, bytes, simulation, multiplePaths, usedItems, emittedItems, missingItems,
+            intermediateFinalOutputAmount, patternTimes, tree, temporaryProviders, graphDisplayBuilder, attemptMetrics,
+            calculation);
+    }
+
     public GenericStack finalOutput() {
         return finalOutput;
     }

@@ -58,8 +58,10 @@ public final class MaterialClosure {
     }
 
     public static MaterialClosure of(AEKey output, CraftingGraph graph) {
+        // A graph with alternative patterns may still resolve through the legacy tree, see
+        // CraftingCalculation#tryAlternatives
         return new MaterialClosure(output, graph.getClosureNodes(), graph.getFuzzyKeys(),
-            graph.requiresLegacyFallback(), graph.hasRecursion());
+            graph.requiresLegacyFallback() || graph.hasAlternatives(), graph.hasRecursion());
     }
 
     /**

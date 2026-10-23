@@ -1,5 +1,6 @@
 package ae2.integration.data;
 
+import ae2.api.crafting.IPatternDetails;
 import ae2.api.implementations.blockentities.PatternContainerGroup;
 import ae2.api.stacks.AEKey;
 import ae2.crafting.CraftingTreeNode;
@@ -19,13 +20,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.RandomAccess;
 
+/**
+ * @param pattern the pattern crafting it, known only where the tree is built and not sent to clients
+ * @param cycle   the crafting cycle it belongs to, numbered within its tree, or -1, see {@link CraftingTreeCycles}
+ */
 public record LiteCraftTreeProc(List<LiteCraftTreeNode> inputs,
                                 List<PatternContainerGroup> machines,
-                                Map<PatternContainerGroup, List<CraftingSupplierLocation>> machineLocations) implements Comparable<LiteCraftTreeProc> {
+                                Map<PatternContainerGroup, List<CraftingSupplierLocation>> machineLocations,
+                                @Nullable IPatternDetails pattern,
+                                int cycle) implements Comparable<LiteCraftTreeProc> {
 
     @SuppressWarnings("unused")
     public LiteCraftTreeProc(List<LiteCraftTreeNode> inputs, List<PatternContainerGroup> machines) {
         this(inputs, machines, Map.of());
+    }
+
+    public LiteCraftTreeProc(List<LiteCraftTreeNode> inputs, List<PatternContainerGroup> machines,
+                             Map<PatternContainerGroup, List<CraftingSupplierLocation>> machineLocations) {
+        this(inputs, machines, machineLocations, null, -1);
     }
 
     @Nullable
@@ -59,7 +71,7 @@ public record LiteCraftTreeProc(List<LiteCraftTreeNode> inputs,
         }
         List<LiteCraftTreeNode> inputs = new ArrayList<>(process.getNodes().size());
         LiteCraftTreeProc proc = new LiteCraftTreeProc(inputs, process.getMachineGroups(),
-            process.getMachineLocations());
+            process.getMachineLocations(), process.getDetails(), -1);
         for (Object2LongMap.Entry<CraftingTreeNode> entry : process.getNodes().object2LongEntrySet()) {
             CraftingTreeNode node = entry.getKey();
             long amount = node.getAmount() * entry.getLongValue() * processTimes;
@@ -93,6 +105,7 @@ public record LiteCraftTreeProc(List<LiteCraftTreeNode> inputs,
         var packetBuffer = new PacketBuffer(buf);
         int size = packetBuffer.readVarInt();
         limits.checkProcessChildCount(size);
+        int cycle = packetBuffer.readVarInt() - 1;
         int machineCount = packetBuffer.readVarInt();
         limits.checkMachineCount(machineCount);
         List<PatternContainerGroup> machines = new ArrayList<>(machineCount);
@@ -112,7 +125,7 @@ public record LiteCraftTreeProc(List<LiteCraftTreeNode> inputs,
             }
         }
         List<LiteCraftTreeNode> inputs = new ArrayList<>(size);
-        LiteCraftTreeProc proc = new LiteCraftTreeProc(inputs, machines, machineLocations);
+        LiteCraftTreeProc proc = new LiteCraftTreeProc(inputs, machines, machineLocations, null, cycle);
         for (int i = 0; i < size; i++) {
             inputs.add(LiteCraftTreeNode.fromBuffer(buf, stackSet, proc, limits, depth));
         }
@@ -131,6 +144,7 @@ public record LiteCraftTreeProc(List<LiteCraftTreeNode> inputs,
         limits.checkMachineCount(machines.size());
         var packetBuffer = new PacketBuffer(buf);
         packetBuffer.writeVarInt(inputs.size());
+        packetBuffer.writeVarInt(cycle + 1);
         packetBuffer.writeVarInt(machines.size());
         if (machines instanceof RandomAccess) {
             for (int machineIndex = 0, machineCount = machines.size(); machineIndex < machineCount; machineIndex++) {
@@ -232,7 +246,7 @@ public record LiteCraftTreeProc(List<LiteCraftTreeNode> inputs,
                 }
             }
         }
-        return new LiteCraftTreeProc(missingInputs, machines, machineLocations);
+        return new LiteCraftTreeProc(missingInputs, machines, machineLocations, pattern, cycle);
     }
 
     public void sort() {
