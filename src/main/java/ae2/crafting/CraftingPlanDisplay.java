@@ -12,21 +12,29 @@ import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.jetbrains.annotations.Nullable;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 public final class CraftingPlanDisplay {
-    private static final AtomicInteger THREAD_IDS = new AtomicInteger();
-    private static final ThreadPoolExecutor EXECUTOR = new ThreadPoolExecutor(
-        1, 1, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8), task -> {
-        var thread = new Thread(task, "AE2 Crafting Tree Display " + THREAD_IDS.incrementAndGet());
-        thread.setDaemon(true);
-        return thread;
-    }, new ThreadPoolExecutor.AbortPolicy());
+    private static final VarHandle THREAD_IDS;
+    private static final VarHandle TREE;
+    private static volatile int threadIds;
+
+    static {
+        try {
+            var lookup = MethodHandles.lookup();
+            THREAD_IDS = lookup.findStaticVarHandle(CraftingPlanDisplay.class, "threadIds", int.class);
+            TREE = lookup.findVarHandle(CraftingPlanDisplay.class, "tree", CompletableFuture.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private volatile @Nullable CompletableFuture<LiteCraftTreeNode> tree;
 
     private final GenericStack output;
     private final Object2LongMap<IPatternDetails> patternTimes;
@@ -36,7 +44,32 @@ public final class CraftingPlanDisplay {
     private final @Nullable CraftingGraphDisplaySnapshot.Builder graphDisplayBuilder;
     private final CraftingAttemptMetrics attemptMetrics;
     private final @Nullable CraftingCalculation calculation;
-    private final AtomicReference<CompletableFuture<LiteCraftTreeNode>> tree = new AtomicReference<>();
+
+    private static @Nullable LocalDisplayFragment hydrateMachineInfo(@Nullable LocalDisplayFragment fragment,
+                                                                     CraftingCalculation calculation) {
+        if (fragment == null) {
+            return null;
+        }
+        var processes = new ObjectArrayList<LocalDisplayFragment.Process>(fragment.processes().size());
+        for (int processIndex = 0; processIndex < fragment.processes().size(); processIndex++) {
+            var process = fragment.processes().get(processIndex);
+            var machines = process.machines();
+            var locations = process.locations();
+            if (process.pattern() != null && machines.isEmpty()) {
+                var info = calculation.getMachineInfo(process.pattern());
+                machines = info.groups();
+                locations = info.locations();
+            }
+            var inputs = new ObjectArrayList<LocalDisplayFragment>(process.inputs().size());
+            for (int inputIndex = 0; inputIndex < process.inputs().size(); inputIndex++) {
+                var input = process.inputs().get(inputIndex);
+                inputs.add(hydrateMachineInfo(input, calculation));
+            }
+            processes.add(new LocalDisplayFragment.Process(process.times(), process.pattern(), machines, locations,
+                inputs));
+        }
+        return new LocalDisplayFragment(fragment.output(), fragment.amount(), fragment.missing(), processes);
+    }
 
     public CraftingPlanDisplay(GenericStack output, Object2LongMap<IPatternDetails> patternTimes,
                                KeyCounter usedItems, KeyCounter missingItems,
@@ -55,13 +88,13 @@ public final class CraftingPlanDisplay {
     }
 
     public CompletableFuture<LiteCraftTreeNode> requestTree() {
-        var current = tree.get();
+        var current = this.tree;
         if (current != null) return current;
 
         var created = new CompletableFuture<LiteCraftTreeNode>();
-        if (!tree.compareAndSet(null, created)) return tree.get();
+        if (!TREE.compareAndSet(this, null, created)) return this.tree;
         try {
-            EXECUTOR.execute(() -> {
+            ExecutorHolder.INSTANCE.execute(() -> {
                 try {
                     created.complete(materialize());
                 } catch (RuntimeException failure) {
@@ -99,7 +132,8 @@ public final class CraftingPlanDisplay {
             return snapshot;
         }
         var nodes = new ObjectArrayList<CraftingGraphDisplaySnapshot.Node>(snapshot.nodes().size());
-        for (var node : snapshot.nodes()) {
+        for (int nodeIndex = 0; nodeIndex < snapshot.nodes().size(); nodeIndex++) {
+            var node = snapshot.nodes().get(nodeIndex);
             var machines = node.machines();
             var locations = node.machineLocations();
             if (node.executed() && node.pattern() != null && machines.isEmpty()) {
@@ -115,27 +149,12 @@ public final class CraftingPlanDisplay {
         return new CraftingGraphDisplaySnapshot(snapshot.rootWhat(), snapshot.requestedAmount(), nodes);
     }
 
-    private static @Nullable LocalDisplayFragment hydrateMachineInfo(@Nullable LocalDisplayFragment fragment,
-                                                                     CraftingCalculation calculation) {
-        if (fragment == null) {
-            return null;
-        }
-        var processes = new ObjectArrayList<LocalDisplayFragment.Process>(fragment.processes().size());
-        for (var process : fragment.processes()) {
-            var machines = process.machines();
-            var locations = process.locations();
-            if (process.pattern() != null && machines.isEmpty()) {
-                var info = calculation.getMachineInfo(process.pattern());
-                machines = info.groups();
-                locations = info.locations();
-            }
-            var inputs = new ObjectArrayList<LocalDisplayFragment>(process.inputs().size());
-            for (var input : process.inputs()) {
-                inputs.add(hydrateMachineInfo(input, calculation));
-            }
-            processes.add(new LocalDisplayFragment.Process(process.times(), process.pattern(), machines, locations,
-                inputs));
-        }
-        return new LocalDisplayFragment(fragment.output(), fragment.amount(), fragment.missing(), processes);
+    private static final class ExecutorHolder {
+        private static final ThreadPoolExecutor INSTANCE = new ThreadPoolExecutor(
+            1, 1, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8), task -> {
+            var thread = new Thread(task, "AE2 Crafting Tree Display " + ((int) THREAD_IDS.getAndAdd(1) + 1));
+            thread.setDaemon(true);
+            return thread;
+        }, new ThreadPoolExecutor.AbortPolicy());
     }
 }

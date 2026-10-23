@@ -1,58 +1,80 @@
 package ae2.crafting;
 
-import java.util.concurrent.atomic.AtomicLong;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 
 /**
  * Lightweight counters retained with a crafting plan independently of performance logging.
  */
 public final class CraftingAttemptMetrics {
-    private final AtomicLong wholeFallbacks = new AtomicLong();
-    private final AtomicLong localPatternPlans = new AtomicLong();
-    private final AtomicLong localComponentPlans = new AtomicLong();
-    private final AtomicLong localReplans = new AtomicLong();
-    private final AtomicLong nativeSccs = new AtomicLong();
-    private final AtomicLong localSccs = new AtomicLong();
-    private final AtomicLong graphCalculationNanos = new AtomicLong();
-    private final AtomicLong displayMaterializationNanos = new AtomicLong();
+    private static final VarHandle LOCAL_PATTERN_PLANS;
+    private static final VarHandle LOCAL_COMPONENT_PLANS;
+    private static final VarHandle LOCAL_REPLANS;
+    private static final VarHandle NATIVE_SCCS;
+    private static final VarHandle LOCAL_SCCS;
+    private static final VarHandle DISPLAY_MATERIALIZATION_NANOS;
+
+    static {
+        try {
+            var lookup = MethodHandles.lookup();
+            LOCAL_PATTERN_PLANS = lookup.findVarHandle(CraftingAttemptMetrics.class, "localPatternPlans", long.class);
+            LOCAL_COMPONENT_PLANS = lookup.findVarHandle(CraftingAttemptMetrics.class, "localComponentPlans", long.class);
+            LOCAL_REPLANS = lookup.findVarHandle(CraftingAttemptMetrics.class, "localReplans", long.class);
+            NATIVE_SCCS = lookup.findVarHandle(CraftingAttemptMetrics.class, "nativeSccs", long.class);
+            LOCAL_SCCS = lookup.findVarHandle(CraftingAttemptMetrics.class, "localSccs", long.class);
+            DISPLAY_MATERIALIZATION_NANOS = lookup.findVarHandle(CraftingAttemptMetrics.class,
+                "displayMaterializationNanos", long.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private volatile long localPatternPlans;
+    private volatile long localComponentPlans;
+    private volatile long localReplans;
+    private volatile long nativeSccs;
+    private volatile long localSccs;
+    private volatile long graphCalculationNanos;
+    private volatile long displayMaterializationNanos;
 
     void recordLocalPatternPlan() {
-        localPatternPlans.incrementAndGet();
+        LOCAL_PATTERN_PLANS.getAndAdd(this, 1L);
     }
 
     void recordLocalComponentPlan() {
-        localComponentPlans.incrementAndGet();
+        LOCAL_COMPONENT_PLANS.getAndAdd(this, 1L);
     }
 
     void recordLocalReplan() {
-        localReplans.incrementAndGet();
+        LOCAL_REPLANS.getAndAdd(this, 1L);
     }
 
     void recordNativeScc() {
-        nativeSccs.incrementAndGet();
+        NATIVE_SCCS.getAndAdd(this, 1L);
     }
 
     void recordLocalScc() {
-        localSccs.incrementAndGet();
+        LOCAL_SCCS.getAndAdd(this, 1L);
     }
 
     void recordGraphCalculation(long nanos) {
-        graphCalculationNanos.set(nanos);
+        this.graphCalculationNanos = nanos;
     }
 
     void recordDisplayMaterialization(long nanos) {
-        displayMaterializationNanos.compareAndSet(0, nanos);
+        DISPLAY_MATERIALIZATION_NANOS.compareAndSet(this, 0L, nanos);
     }
 
     public Snapshot snapshot() {
         return new Snapshot(
-            wholeFallbacks.get(),
-            localPatternPlans.get(),
-            localComponentPlans.get(),
-            localReplans.get(),
-            nativeSccs.get(),
-            localSccs.get(),
-            graphCalculationNanos.get(),
-            displayMaterializationNanos.get());
+            0L,
+            this.localPatternPlans,
+            this.localComponentPlans,
+            this.localReplans,
+            this.nativeSccs,
+            this.localSccs,
+            this.graphCalculationNanos,
+            this.displayMaterializationNanos);
     }
 
     public record Snapshot(long wholeFallbacks,

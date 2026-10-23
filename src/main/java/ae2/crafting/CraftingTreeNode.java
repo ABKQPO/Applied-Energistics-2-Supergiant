@@ -32,12 +32,12 @@ import ae2.crafting.inv.ICraftingInventory;
 import ae2.helpers.patternprovider.PseudoPatternDetails;
 import com.google.common.math.LongMath;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
-import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
-import it.unimi.dsi.fastutil.objects.Reference2LongOpenHashMap;
+import it.unimi.dsi.fastutil.objects.Reference2LongMap;
 import net.minecraft.world.World;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * A crafting tree node is what represents a single requested stack in the crafting process. It can either be the
@@ -207,33 +207,32 @@ public class CraftingTreeNode {
     private void requestInner(CraftingSimulationState inv, long requestedAmount,
                               @Nullable KeyCounter containerItems)
         throws CraftBranchFailure, InterruptedException {
-        buildChildPatterns();
-        var primaryPattern = !this.nodes.isEmpty() ? this.nodes.getFirst().details : null;
-
-        if (primaryPattern != null && requestedAmount > 0) {
-            var bundleKey = new CraftingCalculation.BundleKey(this.what, primaryPattern);
-            var bundle = this.job.getBundle(bundleKey);
-            if (bundle != null) {
-                long craftTimes = divideCeil(getTotalRequestedItems(requestedAmount),
-                    primaryPattern.getPrimaryOutput().amount());
-                var scaled = bundle.scale(craftTimes);
-                if (scaled != null && scaled.isSatisfiable(inv)) {
-                    applyBundle(scaled, inv, containerItems);
-                    return;
-                }
-            }
-        }
-
-        var memoKey = CraftingCalculation.MemoKey.create(this.what, this.job);
-        var cached = this.job.getMemoResult(memoKey);
-        if (cached != null && cached.multiplierFor(requestedAmount) > 0
-            && cached.isApplicable(inv, cached.multiplierFor(requestedAmount))) {
-            applyMemoResult(cached, inv, containerItems, requestedAmount);
+        var memoKey = this.job.isMemoRecording()
+            ? CraftingCalculation.MemoKey.create(this.what, this.parentInput, this.amount, this.job) : null;
+        var cached = memoKey == null ? null : this.job.getMemoResult(memoKey);
+        if (cached != null && cached.isApplicable(inv, requestedAmount)) {
+            applyMemoResult(cached, inv, containerItems);
             return;
         }
 
-        MemoSnapshot snapshot = this.job.isMemoRecording() ? MemoSnapshot.capture(inv, this.job) : null;
-        MemoRecorder recorder = new MemoRecorder();
+        if (this.job.isMemoRecording()) {
+            // Record the subtree in isolation so its peak extraction (including returned catalysts) is retained.
+            // A net inventory delta alone loses the seed needed before the first craft.
+            var child = new ChildCraftingSimulationState(inv);
+            child.recordInventoryReads();
+            requestUncached(child, requestedAmount, containerItems, memoKey);
+            child.applyDiff(inv);
+        } else {
+            requestUncached(inv, requestedAmount, containerItems, memoKey);
+        }
+    }
+
+    private void requestUncached(CraftingSimulationState inv, long requestedAmount,
+                                 @Nullable KeyCounter containerItems, CraftingCalculation.@Nullable MemoKey memoKey)
+        throws CraftBranchFailure, InterruptedException {
+
+        MemoSnapshot snapshot = this.job.isMemoRecording() ? MemoSnapshot.capture(this.job) : null;
+        MemoRecorder recorder = snapshot == null ? null : new MemoRecorder();
         // The amount below is reduced by what storage covers; a result is recorded for the whole request
         final long requested = requestedAmount;
 
@@ -252,7 +251,7 @@ public class CraftingTreeNode {
                 if (extracted > 0) {
                     requestedAmount -= extracted;
                     addContainerItems(template.key(), extracted, containerItems);
-                    if (this.parentInput != null) {
+                    if (this.parentInput != null && recorder != null) {
                         var containerItem = this.parentInput.getRemainingKey(template.key());
                         if (containerItem != null) {
                             recorder.recordContainerItem(containerItem, extracted);
@@ -279,7 +278,7 @@ public class CraftingTreeNode {
 
                     requestedAmount -= extracted;
                     addContainerItems(template.key(), extracted, containerItems);
-                    if (this.parentInput != null) {
+                    if (this.parentInput != null && recorder != null) {
                         var containerItem = this.parentInput.getRemainingKey(template.key());
                         if (containerItem != null) {
                             recorder.recordContainerItem(containerItem, extracted);
@@ -295,7 +294,7 @@ public class CraftingTreeNode {
         }
 
         addContainerItems(what, requestedAmount, containerItems);
-        if (this.parentInput != null) {
+        if (this.parentInput != null && recorder != null) {
             var containerItem = this.parentInput.getRemainingKey(what);
             if (containerItem != null) {
                 recorder.recordContainerItem(containerItem, requestedAmount);
@@ -344,22 +343,14 @@ public class CraftingTreeNode {
             }
         }
 
-        var result = recordMemo(memoKey, recorder, snapshot, inv, requested);
-
-        if (result != null && primaryPattern != null && requested > 0) {
-            long craftTimes = divideCeil(getTotalRequestedItems(requested),
-                primaryPattern.getPrimaryOutput().amount());
-            var bundle = result.toBundle(craftTimes);
-            var bundleKey = new CraftingCalculation.BundleKey(this.what, primaryPattern);
-            this.job.putBundle(bundleKey, bundle);
-        }
+        recordMemo(memoKey, recorder, snapshot, inv, requested);
     }
 
-    private CraftingCalculation.@Nullable MemoResult recordMemo(CraftingCalculation.MemoKey memoKey,
-                                                                MemoRecorder recorder,
+    private CraftingCalculation.@Nullable MemoResult recordMemo(CraftingCalculation.@Nullable MemoKey memoKey,
+                                                                @Nullable MemoRecorder recorder,
                                                                 @Nullable MemoSnapshot snapshot,
                                                                 CraftingSimulationState inv, long requestedAmount) {
-        if (snapshot == null) {
+        if (snapshot == null || memoKey == null || recorder == null) {
             return null;
         }
         var result = recorder.build(snapshot, inv, this.job, requestedAmount);
@@ -890,297 +881,52 @@ public class CraftingTreeNode {
     }
 
     private void applyMemoResult(CraftingCalculation.MemoResult cached, CraftingSimulationState inv,
-                                 @Nullable KeyCounter containerItems, long requestedAmount) throws CraftBranchFailure {
-        long multiplier = cached.multiplierFor(requestedAmount);
-
-        for (var entry : cached.insertedItems) {
-            inv.insert(entry.getKey(), entry.getLongValue() * multiplier, Actionable.MODULATE);
-        }
-
-        for (var entry : cached.emittedItems) {
-            inv.emitItems(entry.getKey(), entry.getLongValue() * multiplier);
-        }
-
-        for (var entry : cached.pseudoItems) {
-            inv.insertPseudo(entry.getKey(), entry.getLongValue() * multiplier, Actionable.MODULATE);
-        }
-
-        for (var entry : cached.missingItems) {
-            this.job.addMissing(entry.getKey(), entry.getLongValue() * multiplier);
-        }
-
-        if (cached.intermediateFinalOutputAmount > 0) {
-            this.job.addIntermediateFinalOutput(cached.intermediateFinalOutputAmount * multiplier);
-        }
-
-        var scaledRecursiveMissingSeeds = new KeyCounter();
-        for (var entry : cached.recursiveMissingSeeds) {
-            scaledRecursiveMissingSeeds.add(entry.getKey(), entry.getLongValue() * multiplier);
-        }
-        var scaledClearedSeeds = new KeyCounter();
-        for (var entry : cached.clearedRecursiveMissingSeeds) {
-            scaledClearedSeeds.add(entry.getKey(), entry.getLongValue() * multiplier);
-        }
-        this.job.applyRecursiveMissingSeedPreview(scaledClearedSeeds, scaledRecursiveMissingSeeds);
-
-        this.job.addRealSeededRecursiveRequests(cached.realSeededRecursiveRequests);
-        this.job.addRealRecursiveSeeds(cached.realRecursiveSeeds);
-        this.job.addRealSeededRecursiveKeys(cached.realSeededRecursiveKeys);
-
-        var scaledDisplayRequests = new Reference2LongOpenHashMap<CraftingTreeNode>();
-        for (var entry : cached.recursiveDisplayRequestsDelta.reference2LongEntrySet()) {
-            scaledDisplayRequests.put(entry.getKey(), entry.getLongValue() * multiplier);
-        }
-        this.job.addRecursiveDisplayRequests(scaledDisplayRequests);
-
-        for (var entry : cached.extracted) {
-            long amount = entry.getLongValue() * multiplier;
-            long extracted = inv.extract(entry.getKey(), amount, Actionable.MODULATE);
-            if (extracted < amount) {
-                throw new CraftBranchFailure(entry.getKey(), amount - extracted);
-            }
-        }
-
-        for (var entry : cached.patternTimes.reference2LongEntrySet()) {
-            inv.addCrafting(entry.getKey(), entry.getLongValue() * multiplier);
-        }
-
-        inv.addBytes(cached.bytes * multiplier);
-
-        if (containerItems != null) {
-            for (var entry : cached.containerItems) {
-                containerItems.add(entry.getKey(), entry.getLongValue() * multiplier);
-            }
-        }
-    }
-
-    private void applyBundle(CraftingCalculation.Bundle bundle, CraftingSimulationState inv,
-                             @Nullable KeyCounter containerItems) throws CraftBranchFailure {
-        for (var entry : bundle.insertedItems) {
-            inv.insert(entry.getKey(), entry.getLongValue(), Actionable.MODULATE);
-        }
-
-        for (var entry : bundle.emittedItems) {
-            inv.emitItems(entry.getKey(), entry.getLongValue());
-        }
-
-        for (var entry : bundle.pseudoItems) {
-            inv.insertPseudo(entry.getKey(), entry.getLongValue(), Actionable.MODULATE);
-        }
-
-        for (var entry : bundle.missingItems) {
-            this.job.addMissing(entry.getKey(), entry.getLongValue());
-        }
-
-        if (bundle.intermediateFinalOutputAmount > 0) {
-            this.job.addIntermediateFinalOutput(bundle.intermediateFinalOutputAmount);
-        }
-        this.job.applyRecursiveMissingSeedPreview(
-            bundle.clearedRecursiveMissingSeeds, bundle.recursiveMissingSeeds);
-        this.job.addRealSeededRecursiveRequests(bundle.realSeededRecursiveRequests);
-        this.job.addRealRecursiveSeeds(bundle.realRecursiveSeeds);
-        this.job.addRealSeededRecursiveKeys(bundle.realSeededRecursiveKeys);
-        this.job.addRecursiveDisplayRequests(bundle.recursiveDisplayRequestsDelta);
-
-        for (var entry : bundle.extracted) {
-            long amount = entry.getLongValue();
-            long extracted = inv.extract(entry.getKey(), amount, Actionable.MODULATE);
-            if (extracted < amount) {
-                throw new CraftBranchFailure(entry.getKey(), amount - extracted);
-            }
-        }
-
-        for (var entry : bundle.patternTimes.reference2LongEntrySet()) {
-            inv.addCrafting(entry.getKey(), entry.getLongValue());
-        }
-
-        inv.addBytes(bundle.bytes);
-
-        if (containerItems != null) {
-            for (var entry : bundle.containerItems) {
-                containerItems.add(entry.getKey(), entry.getLongValue());
-            }
+                                 @Nullable KeyCounter containerItems) {
+        cached.diff().copy().applyTo(inv);
+        if (containerItems != null && cached.containerItems() != null) {
+            containerItems.addAll(cached.containerItems());
         }
     }
 
     private static final class MemoRecorder {
-        private final KeyCounter containerItems = new KeyCounter();
+        private @Nullable KeyCounter containerItems;
 
         void recordContainerItem(AEKey key, long amount) {
-            containerItems.add(key, amount);
+            if (this.containerItems == null) this.containerItems = new KeyCounter();
+            this.containerItems.add(key, amount);
         }
 
-        CraftingCalculation.MemoResult build(MemoSnapshot snapshot,
-                                             CraftingSimulationState inv,
-                                             CraftingCalculation job,
-                                             long requestedAmount) {
-            var result = new CraftingCalculation.MemoResult();
-            result.baseTimes = requestedAmount;
-
-            for (var entry : containerItems) {
-                result.recordContainerItem(entry.getKey(), entry.getLongValue());
-            }
-
-            // The net change of the inventory: extracted items are not only what the parent supplied beyond its
-            // previous peak, and keys first loaded by this request were not inserted by it
-            var inventoryDelta = inv.getInventoryDelta();
-            for (var entry : inventoryDelta) {
-                long delta = entry.getLongValue() - snapshot.snapshotInventoryDelta.get(entry.getKey());
-                if (delta > 0) {
-                    result.recordInserted(entry.getKey(), delta);
-                } else if (delta < 0) {
-                    result.recordExtraction(entry.getKey(), -delta);
-                }
-            }
-            for (var entry : snapshot.snapshotInventoryDelta) {
-                if (inventoryDelta.get(entry.getKey()) == 0 && entry.getLongValue() != 0) {
-                    long delta = -entry.getLongValue();
-                    if (delta > 0) {
-                        result.recordInserted(entry.getKey(), delta);
-                    } else {
-                        result.recordExtraction(entry.getKey(), -delta);
-                    }
-                }
-            }
-
-            for (var entry : inv.getCrafts().object2LongEntrySet()) {
-                long before = snapshot.snapshotCrafts.getLong(entry.getKey());
-                long delta = entry.getLongValue() - before;
-                if (delta > 0) {
-                    result.recordPattern(entry.getKey(), delta);
-                }
-            }
-
-            double deltaBytes = inv.getBytes() - snapshot.snapshotBytes;
-            if (deltaBytes > 0) {
-                result.bytes = deltaBytes;
-            }
-
-            for (var entry : inv.getEmittedItems()) {
-                long before = snapshot.snapshotEmitted.get(entry.getKey());
-                long delta = entry.getLongValue() - before;
-                if (delta > 0) {
-                    result.recordEmitted(entry.getKey(), delta);
-                }
-            }
-
-            for (var entry : inv.getPseudoItems()) {
-                long before = snapshot.snapshotPseudo.get(entry.getKey());
-                long delta = entry.getLongValue() - before;
-                if (delta > 0) {
-                    result.recordPseudo(entry.getKey(), delta);
-                }
-            }
-
-
-            for (var entry : job.getMissingItems()) {
-                long before = snapshot.snapshotMissing.get(entry.getKey());
-                long delta = entry.getLongValue() - before;
-                if (delta > 0) {
-                    result.recordMissing(entry.getKey(), delta);
-                }
-            }
-
-            long intermediateDelta = job.getIntermediateFinalOutputMarker() - snapshot.snapshotIntermediateFinalOutput;
-            if (intermediateDelta > 0) {
-                result.recordIntermediateFinalOutput(intermediateDelta);
-            }
-
-            var recursiveMissingSeedsDelta = new KeyCounter();
-            for (var entry : job.getRecursiveMissingSeedsMarker()) {
-                long before = snapshot.snapshotRecursiveMissingSeeds.get(entry.getKey());
-                long delta = entry.getLongValue() - before;
-                if (delta > 0) {
-                    recursiveMissingSeedsDelta.add(entry.getKey(), delta);
-                }
-            }
-            result.recordRecursiveMissingSeeds(recursiveMissingSeedsDelta);
-
-            var clearedDelta = new KeyCounter();
-            for (var entry : snapshot.snapshotRecursiveMissingSeeds) {
-                long current = job.getRecursiveMissingSeedsMarker().get(entry.getKey());
-                long cleared = entry.getLongValue() - current;
-                if (cleared > 0) {
-                    clearedDelta.add(entry.getKey(), cleared);
-                }
-            }
-            result.recordClearedRecursiveMissingSeeds(clearedDelta);
-
-            var newRealSeededRequests = new ObjectOpenHashSet<AEKey>();
-            for (var key : job.getRealSeededRecursiveRequestsMarker()) {
-                if (!snapshot.snapshotRealSeededRecursiveRequests.contains(key)) {
-                    newRealSeededRequests.add(key);
-                }
-            }
-            result.recordRealSeededRecursiveRequests(newRealSeededRequests);
-
-            var newRealRecursiveSeeds = new ObjectOpenHashSet<AEKey>();
-            for (var key : job.getRealRecursiveSeedsMarker()) {
-                if (!snapshot.snapshotRealRecursiveSeeds.contains(key)) {
-                    newRealRecursiveSeeds.add(key);
-                }
-            }
-            result.recordRealRecursiveSeeds(newRealRecursiveSeeds);
-
-            var newRealSeededKeys = new ObjectOpenHashSet<AEKey>();
-            for (var key : job.getRealSeededRecursiveKeysMarker()) {
-                if (!snapshot.snapshotRealSeededRecursiveKeys.contains(key)) {
-                    newRealSeededKeys.add(key);
-                }
-            }
-            result.recordRealSeededRecursiveKeys(newRealSeededKeys);
-
-            var recursiveDisplayDelta = new Reference2LongOpenHashMap<CraftingTreeNode>();
-            for (var entry : job.getRecursiveDisplayRequestsMarker().reference2LongEntrySet()) {
-                long before = snapshot.snapshotRecursiveDisplayRequests.getLong(entry.getKey());
-                long delta = entry.getLongValue() - before;
-                if (delta > 0) {
-                    recursiveDisplayDelta.put(entry.getKey(), delta);
-                }
-            }
-            result.recordRecursiveDisplayRequests(recursiveDisplayDelta);
-
-            return result;
+        @Nullable CraftingCalculation.MemoResult build(MemoSnapshot snapshot, CraftingSimulationState inv,
+                                                       CraftingCalculation job, long requestedAmount) {
+            // Most recursive results cannot be replayed independently. Reject them before freezing/copying their
+            // inventory, rather than constructing several deltas and throwing the whole result away afterwards.
+            if (job.hasMemoSideEffects(snapshot)) return null;
+            // Recording terminates this request; the recorder's private container counter is transferred as-is.
+            return new CraftingCalculation.MemoResult(inv.freezeDiff(), inv.snapshotInventoryReads(),
+                this.containerItems, requestedAmount);
         }
     }
 
-    private record MemoSnapshot(KeyCounter snapshotInventoryDelta,
-                                Reference2LongOpenHashMap<IPatternDetails> snapshotCrafts,
-                                double snapshotBytes,
-                                KeyCounter snapshotEmitted,
-                                KeyCounter snapshotPseudo,
-                                KeyCounter snapshotMissing,
-                                long snapshotIntermediateFinalOutput,
-                                KeyCounter snapshotRecursiveMissingSeeds,
-                                ObjectOpenHashSet<AEKey> snapshotRealSeededRecursiveRequests,
-                                ObjectOpenHashSet<AEKey> snapshotRealRecursiveSeeds,
-                                ObjectOpenHashSet<AEKey> snapshotRealSeededRecursiveKeys,
-                                Reference2LongOpenHashMap<CraftingTreeNode> snapshotRecursiveDisplayRequests) {
+    record MemoSnapshot(KeyCounter snapshotMissing,
+                        long snapshotIntermediateFinalOutput,
+                        KeyCounter snapshotRecursiveMissingSeeds,
+                        Set<AEKey> snapshotRealSeededRecursiveRequests,
+                        Set<AEKey> snapshotRealRecursiveSeeds,
+                        Set<AEKey> snapshotRealSeededRecursiveKeys,
+                        Reference2LongMap<CraftingTreeNode> snapshotRecursiveDisplayRequests) {
 
-        static MemoSnapshot capture(CraftingSimulationState inv, CraftingCalculation job) {
-            var snapshotInventoryDelta = inv.getInventoryDelta();
-            var snapshotCrafts = new Reference2LongOpenHashMap<IPatternDetails>();
-            snapshotCrafts.putAll(inv.getCrafts());
-            double snapshotBytes = inv.getBytes();
-
-            var snapshotEmitted = new KeyCounter();
-            snapshotEmitted.addAll(inv.getEmittedItems());
-            var snapshotPseudo = new KeyCounter();
-            snapshotPseudo.addAll(inv.getPseudoItems());
+        static MemoSnapshot capture(CraftingCalculation job) {
             var snapshotMissing = new KeyCounter();
             snapshotMissing.addAll(job.getMissingItems());
 
             long snapshotIntermediateFinalOutput = job.getIntermediateFinalOutputMarker();
-            var snapshotRecursiveMissingSeeds = new KeyCounter();
-            snapshotRecursiveMissingSeeds.addAll(job.getRecursiveMissingSeedsMarker());
-            var snapshotRealSeededRecursiveRequests = new ObjectOpenHashSet<>(job.getRealSeededRecursiveRequestsMarker());
-            var snapshotRealRecursiveSeeds = new ObjectOpenHashSet<>(job.getRealRecursiveSeedsMarker());
-            var snapshotRealSeededRecursiveKeys = new ObjectOpenHashSet<>(job.getRealSeededRecursiveKeysMarker());
-            var snapshotRecursiveDisplayRequests = new Reference2LongOpenHashMap<CraftingTreeNode>();
-            snapshotRecursiveDisplayRequests.putAll(job.getRecursiveDisplayRequestsMarker());
+            var snapshotRecursiveMissingSeeds = job.getRecursiveMissingSeedsMarker();
+            var snapshotRealSeededRecursiveRequests = job.getRealSeededRecursiveRequestsMarker();
+            var snapshotRealRecursiveSeeds = job.getRealRecursiveSeedsMarker();
+            var snapshotRealSeededRecursiveKeys = job.getRealSeededRecursiveKeysMarker();
+            var snapshotRecursiveDisplayRequests = job.getRecursiveDisplayRequestsMarker();
 
-            return new MemoSnapshot(snapshotInventoryDelta, snapshotCrafts, snapshotBytes,
-                snapshotEmitted, snapshotPseudo, snapshotMissing,
+            return new MemoSnapshot(snapshotMissing,
                 snapshotIntermediateFinalOutput, snapshotRecursiveMissingSeeds,
                 snapshotRealSeededRecursiveRequests, snapshotRealRecursiveSeeds,
                 snapshotRealSeededRecursiveKeys, snapshotRecursiveDisplayRequests);

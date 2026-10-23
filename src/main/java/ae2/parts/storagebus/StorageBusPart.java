@@ -83,9 +83,10 @@ import net.minecraft.world.IBlockAccess;
 import net.minecraft.world.WorldServer;
 import org.jetbrains.annotations.Nullable;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.Collections;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 public class StorageBusPart extends UpgradeablePart
     implements IGridTickable, IStorageProvider, IPriorityHost, IConfigInvHost {
@@ -673,11 +674,11 @@ public class StorageBusPart extends UpgradeablePart
         @Override
         public void getAvailableStacks(KeyCounter out) {
             ensureCache();
-            for (var entry : this.targetCache) {
-                if (entry.getLongValue() > 0 && isVisibleInAvailableStacks(entry.getKey())) {
-                    out.add(entry.getKey(), entry.getLongValue());
+            this.targetCache.forEach((entryKey, entryAmount) -> {
+                if (entryAmount > 0 && isVisibleInAvailableStacks(entryKey)) {
+                    out.add(entryKey, entryAmount);
                 }
-            }
+            });
         }
 
         @Override
@@ -794,22 +795,22 @@ public class StorageBusPart extends UpgradeablePart
         }
 
         private void publishReplacement(KeyCounter previous, KeyCounter replacement) {
-            for (var entry : replacement) {
-                long oldAmount = Math.max(0, previous.get(entry.getKey()));
-                long delta = entry.getLongValue() - oldAmount;
+            replacement.forEach((entryKey, entryAmount) -> {
+                long oldAmount = Math.max(0, previous.get(entryKey));
+                long delta = entryAmount - oldAmount;
                 if (delta != 0) {
-                    if (isVisibleInAvailableStacks(entry.getKey())) {
-                        notifyDelta(entry.getKey(), delta);
+                    if (isVisibleInAvailableStacks(entryKey)) {
+                        notifyDelta(entryKey, delta);
                     }
                 }
-            }
-            for (var entry : previous) {
-                if (entry.getLongValue() > 0 && replacement.get(entry.getKey()) == 0) {
-                    if (isVisibleInAvailableStacks(entry.getKey())) {
-                        notifyDelta(entry.getKey(), -entry.getLongValue());
+            });
+            previous.forEach((entryKey, entryAmount) -> {
+                if (entryAmount > 0 && replacement.get(entryKey) == 0) {
+                    if (isVisibleInAvailableStacks(entryKey)) {
+                        notifyDelta(entryKey, -entryAmount);
                     }
                 }
-            }
+            });
         }
 
         private void applyDelegateDelta(AEKey what, long delta) {
@@ -938,8 +939,19 @@ public class StorageBusPart extends UpgradeablePart
         }
 
         private final class DelegateListener implements MEStorageChangeListener {
+            private static final VarHandle INVALIDATION_QUEUED;
+
+            static {
+                try {
+                    INVALIDATION_QUEUED = MethodHandles.lookup().findVarHandle(DelegateListener.class,
+                        "invalidationQueued", boolean.class);
+                } catch (ReflectiveOperationException e) {
+                    throw new ExceptionInInitializerError(e);
+                }
+            }
+
             private final Thread ownerThread = Thread.currentThread();
-            private final AtomicBoolean invalidationQueued = new AtomicBoolean();
+            private volatile boolean invalidationQueued;
 
             @Override
             public boolean isValid(Object verificationToken) {
@@ -958,7 +970,7 @@ public class StorageBusPart extends UpgradeablePart
                     AELog.error("Detached storage bus target invoked a content callback.");
                     return;
                 }
-                if (this.invalidationQueued.get()) {
+                if (this.invalidationQueued) {
                     return;
                 }
                 if (processingDelegateCallback || dispatchingListeners) {
@@ -1002,15 +1014,15 @@ public class StorageBusPart extends UpgradeablePart
             }
 
             private void queueThreadInvalidation() {
-                if (this.invalidationQueued.compareAndSet(false, true)) {
+                if (INVALIDATION_QUEUED.compareAndSet(this, false, true)) {
                     AELog.error("Storage bus target invoked a callback from the wrong thread; queuing a server-thread invalidation.");
                     if (!TickHandler.instance().tryAddCallable(null, () -> {
-                        this.invalidationQueued.set(false);
+                        this.invalidationQueued = false;
                         if (delegateListener == this) {
                             markCacheDirty();
                         }
                     })) {
-                        this.invalidationQueued.set(false);
+                        this.invalidationQueued = false;
                     }
                 }
             }

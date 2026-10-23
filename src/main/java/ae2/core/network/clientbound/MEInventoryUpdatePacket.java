@@ -101,7 +101,6 @@ public class MEInventoryUpdatePacket extends ClientboundPacket {
         }
     }
 
-    @Nullable
     private static byte[] encodeEntry(GridInventoryEntry entry) {
         PacketBuffer encoded = new PacketBuffer(Unpooled.buffer(INITIAL_BUFFER_CAPACITY,
             UNCOMPRESSED_PACKET_BYTE_LIMIT));
@@ -231,9 +230,9 @@ public class MEInventoryUpdatePacket extends ClientboundPacket {
         public void addFull(IncrementalUpdateHelper updateHelper, KeyCounter networkStorage, Set<AEKey> craftables,
                             KeyCounter requestables) {
             Set<AEKey> keys = new ObjectOpenHashSet<>();
-            keys.addAll(networkStorage.keySet());
+            networkStorage.forEach((key, amount) -> keys.add(key));
             keys.addAll(craftables);
-            keys.addAll(requestables.keySet());
+            requestables.forEach((key, amount) -> keys.add(key));
 
             for (AEKey key : keys) {
                 if (this.filter != null && !this.filter.matches(key)) {

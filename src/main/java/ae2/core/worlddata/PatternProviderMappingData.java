@@ -12,7 +12,10 @@ import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
 import net.minecraft.world.storage.MapStorage;
 import net.minecraftforge.common.util.Constants.NBT;
+import org.jspecify.annotations.NonNull;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -22,7 +25,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicLong;
 
 public class PatternProviderMappingData extends AESavedData {
     public static final String ID = "ae2_pattern_provider_mappings";
@@ -39,8 +41,25 @@ public class PatternProviderMappingData extends AESavedData {
     private static final String TAG_POSITION = "pos";
     private static final String TAG_SIDE = "side";
     private static final long INVALID_UID_WARNING_INTERVAL_NANOS = 10_000_000_000L;
-    private static final AtomicLong LAST_INVALID_UID_WARNING = new AtomicLong(Long.MIN_VALUE);
-    private static final AtomicLong LAST_MAPPING_INDEX_WARNING = new AtomicLong(Long.MIN_VALUE);
+    private static final VarHandle LAST_INVALID_UID_WARNING;
+    private static final VarHandle LAST_MAPPING_INDEX_WARNING;
+    // Updated atomically through the VarHandles above.
+    @SuppressWarnings("FieldMayBeFinal")
+    private static volatile long lastInvalidUidWarning = Long.MIN_VALUE;
+    @SuppressWarnings("FieldMayBeFinal")
+    private static volatile long lastMappingIndexWarning = Long.MIN_VALUE;
+
+    static {
+        try {
+            var lookup = MethodHandles.lookup();
+            LAST_INVALID_UID_WARNING = lookup.findStaticVarHandle(PatternProviderMappingData.class,
+                "lastInvalidUidWarning", long.class);
+            LAST_MAPPING_INDEX_WARNING = lookup.findStaticVarHandle(PatternProviderMappingData.class,
+                "lastMappingIndexWarning", long.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
 
     private final Map<ProviderReference, Set<String>> recipeTypesByProvider = new Object2ObjectLinkedOpenHashMap<>();
     private final Map<String, Set<ProviderReference>> providersByRecipeType = new Object2ObjectLinkedOpenHashMap<>();
@@ -345,7 +364,7 @@ public class PatternProviderMappingData extends AESavedData {
     }
 
     @Override
-    public void readFromNBT(NBTTagCompound nbt) {
+    public void readFromNBT(@NonNull NBTTagCompound nbt) {
         Objects.requireNonNull(nbt, "nbt");
         Map<ProviderReference, Set<String>> loadedRecipeTypesByProvider = new Object2ObjectLinkedOpenHashMap<>();
         Map<String, Set<ProviderReference>> loadedProvidersByRecipeType = new Object2ObjectLinkedOpenHashMap<>();
@@ -402,7 +421,7 @@ public class PatternProviderMappingData extends AESavedData {
     }
 
     @Override
-    public NBTTagCompound writeToNBT(NBTTagCompound compound) {
+    public @NonNull NBTTagCompound writeToNBT(@NonNull NBTTagCompound compound) {
         Map<String, Set<ProviderReference>> mappings = sanitizeIndexesForWrite();
         NBTTagList mappingTags = new NBTTagList();
         for (Map.Entry<String, Set<ProviderReference>> entry : mappings.entrySet()) {
@@ -494,9 +513,9 @@ public class PatternProviderMappingData extends AESavedData {
         return shouldLogWarning(LAST_INVALID_UID_WARNING, now);
     }
 
-    private static boolean shouldLogWarning(AtomicLong lastWarning, long now) {
+    private static boolean shouldLogWarning(VarHandle lastWarning, long now) {
         while (true) {
-            long previous = lastWarning.get();
+            long previous = (long) lastWarning.getVolatile();
             long elapsed = now - previous;
             if (previous != Long.MIN_VALUE && elapsed >= 0 && elapsed < INVALID_UID_WARNING_INTERVAL_NANOS) {
                 return false;

@@ -69,6 +69,8 @@ import net.minecraft.world.World;
 import net.minecraftforge.oredict.OreDictionary;
 
 import org.jetbrains.annotations.Nullable;
+import org.jspecify.annotations.NonNull;
+
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -115,7 +117,7 @@ public class ColorApplicatorItem extends AEBasePoweredItem implements IBasicCell
     }
 
     @Override
-    public String getItemStackDisplayName(ItemStack stack) {
+    public @NonNull String getItemStackDisplayName(@NonNull ItemStack stack) {
         return getRestrictedDisplayName(stack, super.getItemStackDisplayName(stack));
     }
 
@@ -138,13 +140,13 @@ public class ColorApplicatorItem extends AEBasePoweredItem implements IBasicCell
     }
 
     @Override
-    public EnumActionResult onItemUse(EntityPlayer p, World w, BlockPos pos, EnumHand hand, EnumFacing side, float hitX,
-                                      float hitY, float hitZ) {
+    public @NonNull EnumActionResult onItemUse(@NonNull EntityPlayer p, @NonNull World w, @NonNull BlockPos pos, @NonNull EnumHand hand, @NonNull EnumFacing side, float hitX,
+                                               float hitY, float hitZ) {
         return this.onItemUse(p.getHeldItem(hand), p, w, pos, hand, side, hitX, hitY, hitZ);
     }
 
     @Override
-    public ActionResult<ItemStack> onItemRightClick(World w, EntityPlayer p, EnumHand hand) {
+    public @NonNull ActionResult<ItemStack> onItemRightClick(@NonNull World w, EntityPlayer p, @NonNull EnumHand hand) {
         ItemStack stack = p.getHeldItem(hand);
         if (p.isSneaking()) {
             if (!w.isRemote) {
@@ -433,11 +435,11 @@ public class ColorApplicatorItem extends AEBasePoweredItem implements IBasicCell
                 }
             } else {
                 final ObjectList<AEItemKey> list = new ObjectArrayList<>();
-                for (Object2LongMap.Entry<AEKey> entry : keyList) {
-                    if (entry.getKey() instanceof AEItemKey itemKey) {
+                keyList.forEach((entryKey, entryAmount) -> {
+                    if (entryKey instanceof AEItemKey itemKey) {
                         list.add(itemKey);
                     }
-                }
+                });
 
                 list.sort(Comparator.comparingInt(key -> key.toStack().getItemDamage()));
                 if (list.isEmpty()) {

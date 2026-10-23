@@ -65,11 +65,9 @@ public class NetworkCraftingSimulationState extends CraftingSimulationState {
 
     private static KeyCounter fullSnapshot(KeyCounter cachedInventory) {
         var result = KeyCounter.saturating();
-        for (var entry : cachedInventory) {
-            if (entry.getLongValue() > 0) {
-                result.add(entry.getKey(), entry.getLongValue());
-            }
-        }
+        cachedInventory.forEach((key, amount) -> {
+            if (amount > 0) result.add(key, amount);
+        });
         return result;
     }
 
@@ -78,13 +76,13 @@ public class NetworkCraftingSimulationState extends CraftingSimulationState {
         var result = KeyCounter.saturating(wantedKeys.size() + fuzzyKeys.size());
         for (var key : wantedKeys) {
             if (fuzzyKeys.contains(key)) {
-                for (var variant : cachedInventory.findFuzzy(key, FuzzyMode.IGNORE_ALL)) {
+                cachedInventory.forEachFuzzy(key, FuzzyMode.IGNORE_ALL, (variant, amount) -> {
                     // set(), not add(): several wanted keys can share one fuzzy group, and a repeated visit must
                     // never accumulate the network's amount past what it really holds.
-                    if (variant.getLongValue() > 0) {
-                        result.set(variant.getKey(), variant.getLongValue());
+                    if (amount > 0) {
+                        result.set(variant, amount);
                     }
-                }
+                });
             } else {
                 long amount = cachedInventory.get(key);
                 if (amount > 0) {
@@ -110,5 +108,14 @@ public class NetworkCraftingSimulationState extends CraftingSimulationState {
     @Override
     protected Iterable<AEKey> findFuzzyParent(AEKey input) {
         return Iterables.transform(list.findFuzzy(input, FuzzyMode.IGNORE_ALL), Map.Entry::getKey);
+    }
+
+    @Override
+    protected void cacheFuzzyParent(AEKey what) {
+        if (getClass() == NetworkCraftingSimulationState.class) {
+            list.forEachFuzzy(what, FuzzyMode.IGNORE_ALL, this::cacheInherited);
+        } else {
+            super.cacheFuzzyParent(what);
+        }
     }
 }

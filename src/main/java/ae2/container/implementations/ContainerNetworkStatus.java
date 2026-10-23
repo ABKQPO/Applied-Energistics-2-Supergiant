@@ -37,14 +37,27 @@ import net.minecraft.entity.player.InventoryPlayer;
 import net.minecraft.util.EnumFacing;
 import org.jetbrains.annotations.Nullable;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicLong;
 
 public class ContainerNetworkStatus extends AEBaseContainer {
     private static final String ACTION_EXPORT_GRID = "export_grid";
     private static final String ACTION_TOGGLE_FLOW_TRACKING = "toggle_flow_tracking";
-    private static final AtomicLong NEXT_STATUS_GENERATION = new AtomicLong(1);
+    private static final VarHandle NEXT_STATUS_GENERATION;
+    // Updated through NEXT_STATUS_GENERATION; the backing field must remain writable.
+    @SuppressWarnings("FieldMayBeFinal")
+    private static volatile long nextStatusGeneration = 1;
+
+    static {
+        try {
+            NEXT_STATUS_GENERATION = MethodHandles.lookup().findStaticVarHandle(ContainerNetworkStatus.class,
+                "nextStatusGeneration", long.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
 
     @Nullable
     private IGrid grid;
@@ -59,7 +72,7 @@ public class ContainerNetworkStatus extends AEBaseContainer {
     private EnumFacing gridSide;
     @Nullable
     private IGridNode gridNode;
-    private long statusGeneration = NEXT_STATUS_GENERATION.getAndIncrement();
+    private long statusGeneration = (long) NEXT_STATUS_GENERATION.getAndAdd(1L);
     private long statusRevision;
     private long lastAcceptedStatusGeneration;
     private long lastAcceptedStatusRevision;
@@ -133,7 +146,7 @@ public class ContainerNetworkStatus extends AEBaseContainer {
 
         this.gridNode = currentNode;
         this.grid = currentGrid;
-        this.statusGeneration = NEXT_STATUS_GENERATION.getAndIncrement();
+        this.statusGeneration = (long) NEXT_STATUS_GENERATION.getAndAdd(1L);
         this.statusRevision = 0;
         this.status = new NetworkStatus();
         this.canExportGrid = false;

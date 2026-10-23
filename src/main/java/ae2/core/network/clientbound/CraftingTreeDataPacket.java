@@ -11,12 +11,13 @@ import net.minecraft.network.PacketBuffer;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.Arrays;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class CraftingTreeDataPacket extends ClientboundPacket {
     public static final int CHUNK_BYTES = 128 * 1024;
@@ -27,7 +28,17 @@ public class CraftingTreeDataPacket extends ClientboundPacket {
     private static final byte CHUNK = 1;
     private static final byte COMPLETE = 2;
     private static final byte ERROR = 3;
-    private static final AtomicInteger REQUEST_IDS = new AtomicInteger();
+    private static final VarHandle REQUEST_IDS;
+    private static volatile int requestIds;
+
+    static {
+        try {
+            REQUEST_IDS = MethodHandles.lookup().findStaticVarHandle(CraftingTreeDataPacket.class, "requestIds", int.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
     private static final ThreadPoolExecutor ENCODER = new ThreadPoolExecutor(
         1, 1, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(8), task -> {
         var thread = new Thread(task, "AE2 Crafting Tree Encoder");
@@ -53,7 +64,13 @@ public class CraftingTreeDataPacket extends ClientboundPacket {
     }
 
     public static int nextRequestId() {
-        return REQUEST_IDS.getAndUpdate(value -> value == Integer.MAX_VALUE ? 0 : value + 1);
+        while (true) {
+            int current = requestIds;
+            int next = current == Integer.MAX_VALUE ? 0 : current + 1;
+            if (REQUEST_IDS.compareAndSet(current, next)) {
+                return current;
+            }
+        }
     }
 
     public static CraftingTreeDataPacket begin(int windowId, int requestId, int chunkCount, int totalBytes) {

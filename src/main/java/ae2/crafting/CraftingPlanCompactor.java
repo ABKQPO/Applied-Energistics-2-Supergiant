@@ -3,6 +3,7 @@ package ae2.crafting;
 import ae2.api.crafting.IAssemblerPattern;
 import ae2.api.crafting.IPatternDetails;
 import ae2.api.stacks.AEKey;
+import ae2.api.stacks.AEKey2LongMap;
 import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 import ae2.core.AELog;
@@ -16,10 +17,10 @@ import it.unimi.dsi.fastutil.ints.Int2LongLinkedOpenHashMap;
 import it.unimi.dsi.fastutil.ints.Int2LongMap;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.ints.IntHeapPriorityQueue;
+import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2LongLinkedOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2LongMap;
-import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import net.minecraft.world.World;
 import org.jetbrains.annotations.Nullable;
@@ -76,8 +77,7 @@ final class CraftingPlanCompactor {
                 - plan.missingItems().get(output);
             return lacking <= 0 ? plan : withMissing(plan, output, lacking, calculation);
         }
-        var level = calculation.getLevel();
-        if (CraftingCpuReplay.runs(plan, level)) {
+        if (CraftingCpuReplay.runs(plan, calculation)) {
             return plan;
         }
         AELog.crafting("Repairing a crafting plan for %s the crafting CPU could not run", plan.finalOutput());
@@ -87,12 +87,21 @@ final class CraftingPlanCompactor {
         } catch (CraftingCalculationFailure | ArithmeticException unbalanced) {
             compacted = plan;
         }
-        if (compacted != plan && CraftingCpuReplay.runs(compacted, level)) {
+        if (compacted != plan && CraftingCpuReplay.runs(compacted, calculation)) {
             return compacted;
         }
+        try {
+            var guarded = new CraftingPlanCompactor(calculation).repairInputChoices(plan);
+            if (guarded != null) return guarded;
+        } catch (ArithmeticException overflow) {
+            // A conservative bound may overflow even when a more specific allocation does not.
+        }
         // Whatever the CPU would still lack is reported missing, rather than leaving it stuck on a craft
-        var lacking = CraftingCpuReplay.lacking(compacted, level);
-        if (lacking == null || lacking.isEmpty()) {
+        var lacking = CraftingCpuReplay.lacking(compacted, calculation);
+        if (lacking == null) {
+            return keepOrFail(compacted, false);
+        }
+        if (lacking.isEmpty()) {
             return compacted;
         }
         var missing = new KeyCounter();
@@ -104,16 +113,16 @@ final class CraftingPlanCompactor {
 
     static CraftingPlan compact(CraftingPlan plan, CraftingCalculation calculation) throws InterruptedException {
         if (plan.patternTimes()
-            .isEmpty()) {
+                .isEmpty()) {
             // The request is never taken from storage, so without crafts only an emitter makes it, or it is missing
             final AEKey output = plan.finalOutput()
-                .what();
+                                     .what();
             final long lacking = plan.finalOutput()
-                .amount()
+                                     .amount()
                 - plan.emittedItems()
-                    .get(output)
+                      .get(output)
                 - plan.missingItems()
-                    .get(output);
+                      .get(output);
             return lacking <= 0 ? plan : withMissing(plan, output, lacking, calculation);
         }
         final CraftingPlanCompactor compactor = new CraftingPlanCompactor(calculation);
@@ -136,11 +145,121 @@ final class CraftingPlanCompactor {
     }
 
     /**
+     * An allocation to one input variant is not a reservation on the CPU. In an acyclic plan, reserve the maximum
+     * consumption of each available variant and propagate those demands once, from consumers to producers. This
+     * may add crafts, but cannot leave a consumer short when another consumer chooses its ingredient. Cycles,
+     * containers and competing producers still need the general solver.
+     */
+    private @Nullable CraftingPlan repairInputChoices(CraftingPlan plan) throws InterruptedException {
+        if (!prepare(plan) || !this.flexible) return null;
+        int finalKey = this.keyIndex.getInt(plan.finalOutput().what());
+        if (finalKey < 0 || this.producers.get(finalKey).size() != 1) return null;
+        this.stock = new long[this.keys.size()];
+        for (int key = 0; key < this.stock.length; key++) {
+            this.stock[key] = key == finalKey ? plan.usedItems().get(this.keys.get(key))
+                : Math.max(plan.usedItems().get(this.keys.get(key)), this.calculation.getNetworkAmount(this.keys.get(key)));
+        }
+        var available = this.stock.clone();
+        addAll(available, plan.emittedItems());
+        var inputs = new ArrayList<Int2LongLinkedOpenHashMap>(this.recipes.size());
+        var dependencies = new ArrayList<IntArrayList>(this.recipes.size());
+        var consumers = new int[this.recipes.size()];
+        for (var recipe : this.recipes) {
+            this.calculation.handlePausing();
+            if (PseudoPatternDetails.isPseudo(recipe.pattern)
+                || recipe.pattern instanceof IAssemblerPattern assembler
+                && (assembler.canSubstitute() || assembler.canSubstituteFluids())) return null;
+            for (int i = 0; i < recipe.keys.length; i++) {
+                if (recipe.in[i] > 0 && recipe.out[i] > 0) return null;
+            }
+            var bound = new Int2LongLinkedOpenHashMap();
+            for (var input : recipe.pattern.getInputs()) {
+                var possible = input.possibleInputs();
+                var included = new IntOpenHashSet(possible.length);
+                for (var variant : possible) {
+                    if (input.getRemainingKey(variant.what()) != null) return null;
+                    int key = this.keyIndex.getInt(variant.what());
+                    // A variant absent from both stock and planned outputs can never steal another input.
+                    if (possible.length == 1 || available[key] > 0 || !this.producers.get(key).isEmpty()
+                        || plan.missingItems().get(variant.what()) > 0) {
+                        included.add(key);
+                    }
+                }
+                if (included.isEmpty()) included.add(this.keyIndex.getInt(possible[0].what()));
+                long amount = Math.multiplyExact(possible[0].amount(), input.getMultiplier());
+                for (int key : included) {
+                    bound.put(key, Math.addExact(bound.get(key), amount));
+                }
+            }
+            inputs.add(bound);
+            var before = new IntArrayList();
+            var seen = new IntOpenHashSet(bound.size());
+            for (int key : bound.keySet()) {
+                var makers = this.producers.get(key);
+                if (makers.size() > 1) return null;
+                if (!makers.isEmpty()) {
+                    int producer = makers.getFirst().index;
+                    if (seen.add(producer)) {
+                        before.add(producer);
+                        consumers[producer]++;
+                    }
+                }
+            }
+            dependencies.add(before);
+        }
+        var order = new IntArrayList();
+        for (int i = 0; i < consumers.length; i++) {
+            if (consumers[i] == 0) order.add(i);
+        }
+        var demand = new long[this.keys.size()];
+        var produced = new long[this.keys.size()];
+        var times = new long[this.recipes.size()];
+        demand[finalKey] = plan.finalOutput().amount();
+        for (int next = 0; next < order.size(); next++) {
+            this.calculation.handlePausing();
+            int index = order.getInt(next);
+            var recipe = this.recipes.get(index);
+            long crafts = recipe.limit;
+            for (int i = 0; i < recipe.keys.length; i++) {
+                int key = recipe.keys[i];
+                if (recipe.out[i] > 0 && demand[key] > available[key]) {
+                    crafts = Math.max(crafts, ceilDiv(demand[key] - available[key], recipe.out[i]));
+                }
+            }
+            times[index] = crafts;
+            for (int i = 0; i < recipe.keys.length; i++) {
+                int key = recipe.keys[i];
+                produced[key] = Math.addExact(produced[key], Math.multiplyExact(recipe.out[i], crafts));
+            }
+            for (var input : inputs.get(index).int2LongEntrySet()) {
+                int key = input.getIntKey();
+                demand[key] = Math.addExact(demand[key], Math.multiplyExact(input.getLongValue(), crafts));
+            }
+            for (int producer : dependencies.get(index)) {
+                if (--consumers[producer] == 0) order.add(producer);
+            }
+        }
+        if (order.size() != this.recipes.size()) return null;
+        var taken = new long[this.keys.size()];
+        for (int key = 0; key < taken.length; key++) {
+            taken[key] = Math.max(0, demand[key] - produced[key]);
+        }
+        var guarded = rebuild(plan, times, taken);
+        // The bound includes mutually exclusive choices. The actual CPU order may need less stock than that bound.
+        if (!guarded.missingItems().isEmpty()) {
+            var supplied = guarded.withContents(guarded.usedItems(), guarded.emittedItems(), new KeyCounter(),
+                guarded.patternTimes(), this.calculation);
+            if (CraftingCpuReplay.runs(supplied, this.calculation)) return supplied;
+        }
+        return CraftingCpuReplay.runs(guarded, this.calculation) ? guarded : null;
+    }
+
+    /**
      * @return false when a pattern of the plan cannot be modelled, and the plan is kept as it is
      */
     private boolean prepare(CraftingPlan plan) {
         for (Object2LongMap.Entry<IPatternDetails> entry : plan.patternTimes()
-            .object2LongEntrySet()) {
+                                                               .object2LongEntrySet()) {
             if (entry.getLongValue() <= 0) continue;
             final Recipe recipe = Recipe.of(entry.getKey(), entry.getLongValue(), this);
             if (recipe == null) {
@@ -166,7 +285,7 @@ final class CraftingPlanCompactor {
             final AEKey what = this.keys.get(key);
             // A pattern made for the key comes before those that only make it on the side
             this.producers.get(key)
-                .sort((a, b) -> Boolean.compare(!a.makesFirst(what), !b.makesFirst(what)));
+                          .sort((a, b) -> Boolean.compare(!a.makesFirst(what), !b.makesFirst(what)));
         }
         this.rank = rankFrom(finalKey);
 
@@ -242,7 +361,7 @@ final class CraftingPlanCompactor {
         }
         final long[] demand = new long[this.keys.size()];
         demand[finalKey] = plan.finalOutput()
-            .amount();
+                               .amount();
         final long[] borrowed = new long[grownSupply.length];
         if (replay(times, grownSupply, demand, borrowed) == null) {
             return repairAsIs(plan);
@@ -303,7 +422,7 @@ final class CraftingPlanCompactor {
         addAll(supply, plan.missingItems());
         final long[] demand = new long[this.keys.size()];
         demand[finalKey] = plan.finalOutput()
-            .amount();
+                               .amount();
         final long[] borrowed = new long[this.keys.size()];
         if (replayGreedy(times, supply, demand, borrowed, finalKey) != Replay.DONE) {
             return keepOrFail(plan, this.planBalanced);
@@ -334,7 +453,7 @@ final class CraftingPlanCompactor {
         addAll(supply, plan.missingItems());
         final long[] demand = new long[this.keys.size()];
         demand[finalKey] = plan.finalOutput()
-            .amount();
+                               .amount();
         final long[] borrowed = new long[this.keys.size()];
         if (replayGreedy(times, supply, demand, borrowed, finalKey) != Replay.DONE) {
             return false;
@@ -482,12 +601,12 @@ final class CraftingPlanCompactor {
     }
 
     private void addAll(long[] target, KeyCounter counter) {
-        for (Object2LongMap.Entry<AEKey> entry : counter) {
-            final int key = this.keyIndex.getInt(entry.getKey());
-            if (key >= 0 && entry.getLongValue() > 0) {
-                target[key] = Math.addExact(target[key], entry.getLongValue());
+        counter.forEach((entryKey, entryAmount) -> {
+            final int key = this.keyIndex.getInt(entryKey);
+            if (key >= 0 && entryAmount > 0) {
+                target[key] = Math.addExact(target[key], entryAmount);
             }
-        }
+        });
     }
 
     private int indexOf(AEKey key) {
@@ -498,7 +617,7 @@ final class CraftingPlanCompactor {
             this.keys.add(key);
             this.producers.add(new ArrayList<>(1));
             this.groups.computeIfAbsent(key.getPrimaryKey(), k -> new IntArrayList(1))
-                .add(index);
+                       .add(index);
             if (this.balance.length <= index) {
                 this.balance = Arrays.copyOf(this.balance, Math.max(16, this.balance.length * 2));
                 this.shortfall = Arrays.copyOf(this.shortfall, this.balance.length);
@@ -507,7 +626,6 @@ final class CraftingPlanCompactor {
         return index;
     }
 
-    @Nullable
     private long[] fill(long[] initial, long[] limits) throws InterruptedException {
         this.steps = 0;
         this.balance = Arrays.copyOf(initial, Math.max(initial.length, this.balance.length));
@@ -585,7 +703,7 @@ final class CraftingPlanCompactor {
             }
             if (this.balance[key] < 0) {
                 if (!this.producers.get(key)
-                    .isEmpty()) {
+                                   .isEmpty()) {
                     return null;
                 }
                 // Nothing in the plan makes it, so the rest is missing
@@ -745,7 +863,7 @@ final class CraftingPlanCompactor {
     private int defaultVariant(Slot slot) {
         for (int variant : slot.fixed) {
             if (!this.producers.get(variant)
-                .isEmpty() && valid(slot, variant)) {
+                               .isEmpty() && valid(slot, variant)) {
                 return variant;
             }
         }
@@ -790,13 +908,11 @@ final class CraftingPlanCompactor {
         return remaining;
     }
 
-    @Nullable
     private long[] replay(long[] times, long[] supply, long[] demand) throws InterruptedException {
         return replay(times, supply, demand, null);
     }
 
-    @Nullable
-    private long[] replay(long[] times, long[] supply, long[] demand, @Nullable long[] borrowed)
+    private long[] replay(long[] times, long[] supply, long[] demand, long[] borrowed)
         throws InterruptedException {
         this.steps = 0;
         final long[] inventory = supply.clone();
@@ -851,7 +967,7 @@ final class CraftingPlanCompactor {
     }
 
     private boolean borrowFor(List<Int2LongLinkedOpenHashMap[]> allocations, long[] left, long[] inventory,
-        long[] borrowed) {
+                              long[] borrowed) {
         for (Recipe recipe : this.recipes) {
             if (left[recipe.index] <= 0) continue;
             boolean any = false;
@@ -886,7 +1002,7 @@ final class CraftingPlanCompactor {
     }
 
     private long prepareBatch(Recipe recipe, Int2LongLinkedOpenHashMap[] allocation, long[] inventory, long wanted,
-        Batch batch) {
+                              Batch batch) {
         batch.reset(recipe);
         long crafts = wanted;
         for (int s = 0; s < recipe.slots.length; s++) {
@@ -934,19 +1050,19 @@ final class CraftingPlanCompactor {
                 left[key] -= amount;
             }
         }
-        for (Object2LongMap.Entry<AEKey> entry : plan.usedItems()) {
-            if (this.keyIndex.getInt(entry.getKey()) < 0) {
+        plan.usedItems().forEach((entryKey, entryAmount) -> {
+            if (this.keyIndex.getInt(entryKey) < 0) {
                 // No craft touches it, so the replay knows nothing about it
-                used.add(entry.getKey(), entry.getLongValue());
+                used.add(entryKey, entryAmount);
             }
-        }
+        });
         final KeyCounter emitted = take(plan.emittedItems(), left);
         final KeyCounter missing = new KeyCounter();
-        for (Object2LongMap.Entry<AEKey> entry : plan.missingItems()) {
-            if (this.keyIndex.getInt(entry.getKey()) < 0) {
-                missing.add(entry.getKey(), entry.getLongValue());
+        plan.missingItems().forEach((entryKey, entryAmount) -> {
+            if (this.keyIndex.getInt(entryKey) < 0) {
+                missing.add(entryKey, entryAmount);
             }
-        }
+        });
         for (int key = 0; key < left.length; key++) {
             if (left[key] > 0) {
                 missing.add(this.keys.get(key), left[key]);
@@ -957,19 +1073,19 @@ final class CraftingPlanCompactor {
 
     private KeyCounter take(KeyCounter source, long[] left) {
         final KeyCounter result = new KeyCounter();
-        for (Object2LongMap.Entry<AEKey> entry : source) {
-            final int key = this.keyIndex.getInt(entry.getKey());
+        source.forEach((entryKey, entryAmount) -> {
+            final int key = this.keyIndex.getInt(entryKey);
             if (key < 0 || key >= left.length) {
                 // No craft touches it, so the replay knows nothing about it
-                result.add(entry.getKey(), entry.getLongValue());
-                continue;
+                result.add(entryKey, entryAmount);
+                return;
             }
-            final long amount = Math.min(entry.getLongValue(), left[key]);
+            final long amount = Math.min(entryAmount, left[key]);
             if (amount > 0) {
-                result.add(entry.getKey(), amount);
+                result.add(entryKey, amount);
                 left[key] -= amount;
             }
-        }
+        });
         return result;
     }
 
@@ -1060,33 +1176,15 @@ final class CraftingPlanCompactor {
         }
     }
 
-    private static final class Recipe {
-
-        private final IPatternDetails pattern;
-        private final int index;
-        private final long limit;
-        private final int[] keys;
-        private final long[] in;
-        private final long[] out;
-        private final Slot[] slots;
-
-        private Recipe(IPatternDetails pattern, int index, long limit, int[] keys, long[] in, long[] out,
-            Slot[] slots) {
-            this.pattern = pattern;
-            this.index = index;
-            this.limit = limit;
-            this.keys = keys;
-            this.in = in;
-            this.out = out;
-            this.slots = slots;
-        }
+    private record Recipe(IPatternDetails pattern, int index, long limit, int[] keys, long[] in, long[] out,
+                          Slot[] slots) {
 
         @Nullable
         static Recipe of(IPatternDetails pattern, long limit, CraftingPlanCompactor compactor) {
             final boolean substitutes = PseudoPatternDetails.unwrap(pattern) instanceof IAssemblerPattern assembler
                 && assembler.canSubstitute();
-            final Object2LongOpenHashMap<AEKey> inputs = new Object2LongOpenHashMap<>();
-            final Object2LongOpenHashMap<AEKey> outputs = new Object2LongOpenHashMap<>();
+            final AEKey2LongMap inputs = new AEKey2LongMap.OpenHashMap();
+            final AEKey2LongMap outputs = new AEKey2LongMap.OpenHashMap();
             final List<Slot> slots = new ArrayList<>();
             for (IPatternDetails.IInput input : pattern.getInputs()) {
                 final GenericStack[] possible = input.possibleInputs();
@@ -1114,7 +1212,7 @@ final class CraftingPlanCompactor {
                 for (int v = 0; v < possible.length; v++) {
                     fixed[v] = compactor.indexOf(possible[v].what());
                     groupKeys[v] = possible[v].what()
-                        .getPrimaryKey();
+                                              .getPrimaryKey();
                 }
                 slots.add(new Slot(input, amount, fixed, substitutes, groupKeys));
             }
@@ -1151,7 +1249,7 @@ final class CraftingPlanCompactor {
             for (int i = 0; i < keys.length; i++) {
                 if (out[i] > in[i]) {
                     compactor.producers.get(keys[i])
-                        .add(recipe);
+                                       .add(recipe);
                 }
             }
             return recipe;
@@ -1166,9 +1264,9 @@ final class CraftingPlanCompactor {
 
         boolean makesFirst(AEKey key) {
             final List<GenericStack> outputs = this.pattern.getOutputs();
-            return !outputs.isEmpty() && outputs.get(0)
-                .what()
-                .equals(key);
+            return !outputs.isEmpty() && outputs.getFirst()
+                                                .what()
+                                                .equals(key);
         }
 
         long net(int key) {

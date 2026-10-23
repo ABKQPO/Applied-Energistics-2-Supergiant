@@ -25,6 +25,8 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.text.ITextComponent;
 import org.jetbrains.annotations.Nullable;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -33,7 +35,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Internal Grid directory for queryable pattern providers.
@@ -44,7 +45,19 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class ActivePatternProviderDirectory implements IGridService, IGridServiceProvider {
     private static final long WARNING_INTERVAL_NANOS = 10_000_000_000L;
-    private static final AtomicLong LAST_DIRECTORY_TEXT_WARNING = new AtomicLong(Long.MIN_VALUE);
+    private static final VarHandle LAST_DIRECTORY_TEXT_WARNING;
+    // Updated through LAST_DIRECTORY_TEXT_WARNING; the backing field must remain writable.
+    @SuppressWarnings("FieldMayBeFinal")
+    private static volatile long lastDirectoryTextWarning = Long.MIN_VALUE;
+
+    static {
+        try {
+            LAST_DIRECTORY_TEXT_WARNING = MethodHandles.lookup().findStaticVarHandle(ActivePatternProviderDirectory.class,
+                "lastDirectoryTextWarning", long.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
 
     private static final Comparator<ProviderReference> PROVIDER_REFERENCE_ORDER = Comparator
         .comparingInt(ProviderReference::dimension)
@@ -356,7 +369,7 @@ public final class ActivePatternProviderDirectory implements IGridService, IGrid
     private static boolean shouldLogDirectoryWarning() {
         long now = System.nanoTime();
         while (true) {
-            long previous = LAST_DIRECTORY_TEXT_WARNING.get();
+            long previous = lastDirectoryTextWarning;
             if (previous != Long.MIN_VALUE && now - previous < WARNING_INTERVAL_NANOS) {
                 return false;
             }

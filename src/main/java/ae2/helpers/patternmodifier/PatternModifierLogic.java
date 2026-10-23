@@ -14,13 +14,24 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.world.World;
 import org.jetbrains.annotations.Nullable;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public final class PatternModifierLogic {
     private static final int REENCODE_FAILURE_WARNING_LIMIT = 8;
-    private static final AtomicInteger REENCODE_FAILURE_WARNING_COUNT = new AtomicInteger();
+    private static final VarHandle REENCODE_FAILURE_WARNING_COUNT;
+    private static volatile int reencodeFailureWarningCount;
+
+    static {
+        try {
+            REENCODE_FAILURE_WARNING_COUNT = MethodHandles.lookup().findStaticVarHandle(PatternModifierLogic.class,
+                "reencodeFailureWarningCount", int.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
 
     private PatternModifierLogic() {
     }
@@ -191,8 +202,14 @@ public final class PatternModifierLogic {
     }
 
     private static void warnReencodeFailure(String operation, RuntimeException exception) {
-        int warningIndex = REENCODE_FAILURE_WARNING_COUNT.getAndUpdate(
-            current -> current <= REENCODE_FAILURE_WARNING_LIMIT ? current + 1 : current);
+        int warningIndex;
+        while (true) {
+            warningIndex = reencodeFailureWarningCount;
+            if (warningIndex > REENCODE_FAILURE_WARNING_LIMIT
+                || REENCODE_FAILURE_WARNING_COUNT.compareAndSet(warningIndex, warningIndex + 1)) {
+                break;
+            }
+        }
         if (warningIndex < REENCODE_FAILURE_WARNING_LIMIT) {
             AELog.warn(exception, "Failed to re-encode a pattern while %s", operation);
         } else if (warningIndex == REENCODE_FAILURE_WARNING_LIMIT) {

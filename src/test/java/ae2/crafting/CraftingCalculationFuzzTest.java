@@ -47,6 +47,15 @@ class CraftingCalculationFuzzTest {
             try {
                 var plan = net.plan(target, amount);
                 plans++;
+                if (!plan.finalOutput().what().equals(CraftingTestNetwork.key(target))
+                    || plan.finalOutput().amount() != amount) {
+                    problems.add("seed " + seed + ": changed the requested output: " + plan.finalOutput());
+                }
+                for (var entry : plan.usedItems()) {
+                    if (entry.getLongValue() < 0 || entry.getLongValue() > net.stock.get(entry.getKey())) {
+                        problems.add("seed " + seed + ": used unavailable stock: " + entry);
+                    }
+                }
                 var verdict = replay(plan);
                 if (verdict != null) {
                     problems.add("seed " + seed + ": " + verdict + ", crafts " + plan.patternTimes() + ", used "

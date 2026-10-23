@@ -18,6 +18,7 @@ import ae2.api.stacks.AEKeyTypes;
 import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 import ae2.core.AEConfig;
+import ae2.crafting.graph.CraftingGraph;
 import ae2.hooks.ticking.TickHandler;
 import ae2.me.service.CraftingService;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
@@ -43,10 +44,12 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
@@ -65,6 +68,7 @@ final class CraftingTestNetwork {
     final KeyCounter stock = new KeyCounter();
     final List<TestPattern> patterns = new ArrayList<>();
     final Map<AEKey, AEKey> containers = new HashMap<>();
+    private final Map<IPatternDetails, Provider> providers = new IdentityHashMap<>();
     private final CraftingService service;
     private final IGrid grid;
     private int nextDefinition;
@@ -139,6 +143,18 @@ final class CraftingTestNetwork {
         stock.add(key(name), amount);
     }
 
+    static long crafts(ICraftingPlan plan, IPatternDetails pattern) {
+        return plan.patternTimes().getLong(pattern);
+    }
+
+    static Set<String> names(KeyCounter counter) {
+        var names = new TreeSet<String>();
+        for (var entry : counter) {
+            names.add(entry.getKey() + " x" + entry.getLongValue());
+        }
+        return names;
+    }
+
     /** One craft of the pattern leaves {@code remaining} in place of each {@code input} it takes. */
     void container(String input, String remaining) {
         containers.put(key(input), key(remaining));
@@ -152,11 +168,42 @@ final class CraftingTestNetwork {
         return pattern(name, -this.patterns.size(), inputs, outputs);
     }
 
+    void store(AEKey what, long amount) {
+        stock.add(what, amount);
+    }
+
+    void setStock(String name, long amount) {
+        stock.set(key(name), amount);
+    }
+
     TestPattern pattern(String name, int priority, Object[] inputs, Object[] outputs) {
         var pattern = new TestPattern(name, AEItemKey.of(new ItemStack(Items.PAPER, 1, nextDefinition++)), inputs,
             outputs, containers);
         this.patterns.add(pattern);
-        this.service.addGlobalCraftingProvider(new Provider(pattern, priority));
+        return addPattern(pattern, priority);
+    }
+
+    TestPattern pattern(String name, IPatternDetails.IInput[] inputs, Object[] outputs) {
+        var pattern = new TestPattern(name, AEItemKey.of(new ItemStack(Items.PAPER, 1, nextDefinition++)),
+            inputs, outputs);
+        this.patterns.add(pattern);
+        return addPattern(pattern, -this.patterns.size());
+    }
+
+    IPatternDetails.IInput input(long multiplier, String... variants) {
+        var stacks = new GenericStack[variants.length];
+        for (int i = 0; i < variants.length; i++) stacks[i] = new GenericStack(key(variants[i]), 1);
+        return new Input(stacks, containers, multiplier);
+    }
+
+    IPatternDetails.IInput input(long multiplier, GenericStack... variants) {
+        return new Input(variants.clone(), containers, multiplier);
+    }
+
+    <T extends IPatternDetails> T addPattern(T pattern, int priority) {
+        var provider = new Provider(pattern, priority);
+        if (providers.putIfAbsent(pattern, provider) != null) throw new IllegalArgumentException("Already registered");
+        this.service.addGlobalCraftingProvider(provider);
         return pattern;
     }
 
@@ -168,20 +215,35 @@ final class CraftingTestNetwork {
         return plan(what, amount, CalculationStrategy.REPORT_MISSING_ITEMS);
     }
 
-    ICraftingPlan plan(String what, long amount, CalculationStrategy strategy) {
-        var node = proxy(IGridNode.class, (method, args) -> method.getName().equals("grid") ? this.grid : null);
-        var requester = new ICraftingSimulationRequester() {
-            @Override
-            public @Nullable IActionSource getActionSource() {
-                return null;
-            }
+    void removePattern(IPatternDetails pattern) {
+        var provider = providers.remove(pattern);
+        if (provider == null) throw new IllegalArgumentException("Not registered");
+        this.service.removeGlobalCraftingProvider(provider);
+        patterns.remove(pattern);
+    }
 
-            @Override
-            public IGridNode getGridNode() {
-                return node;
-            }
-        };
-        var future = this.service.beginCraftingCalculation(world, requester, key(what), amount, strategy);
+    void priority(IPatternDetails pattern, int priority) {
+        var provider = providers.get(pattern);
+        if (provider == null) throw new IllegalArgumentException("Not registered");
+        provider.priority = priority;
+        this.service.refreshGlobalCraftingProvider(provider);
+    }
+
+    @Nullable CraftingGraph cachedGraph(String what) {
+        return this.service.peekCachedGraph(key(what));
+    }
+
+    ICraftingPlan plan(String what, long amount, CalculationStrategy strategy) {
+        return plan(key(what), amount, strategy);
+    }
+
+    ICraftingPlan plan(AEKey what, long amount) {
+        return plan(what, amount, CalculationStrategy.REPORT_MISSING_ITEMS);
+    }
+
+    ICraftingPlan plan(AEKey what, long amount, CalculationStrategy strategy) {
+        var requester = requester();
+        var future = this.service.beginCraftingCalculation(world, requester, what, amount, strategy);
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
         try {
             while (!future.isDone()) {
@@ -212,8 +274,10 @@ final class CraftingTestNetwork {
         return total;
     }
 
-    static long crafts(ICraftingPlan plan, TestPattern pattern) {
-        return plan.patternTimes().getLong(pattern);
+    CraftingCalculation calculation(AEKey what, long amount) {
+        this.service.canEmitFor(what); // Initialize the provider index on the driving thread, as beginCalculation does.
+        return new CraftingCalculation(world, this.grid, requester(), new GenericStack(what, amount),
+            CalculationStrategy.REPORT_MISSING_ITEMS, null);
     }
 
     static long used(ICraftingPlan plan, String what) {
@@ -412,6 +476,59 @@ final class CraftingTestNetwork {
         Object handle(Method method, Object[] args) throws Throwable;
     }
 
+    private ICraftingSimulationRequester requester() {
+        var node = proxy(IGridNode.class, (method, args) -> method.getName().equals("grid") ? this.grid : null);
+        return new ICraftingSimulationRequester() {
+            @Override
+            public @Nullable IActionSource getActionSource() {
+                return null;
+            }
+
+            @Override
+            public IGridNode getGridNode() {
+                return node;
+            }
+        };
+    }
+
+    String describe() {
+        var text = new StringBuilder();
+        for (var pattern : this.patterns) {
+            text.append(pattern).append(':');
+            for (var input : pattern.getInputs()) {
+                text.append(' ');
+                for (var possible : input.possibleInputs()) {
+                    text.append(possible.what()).append(" x").append(possible.amount()).append('|');
+                }
+                text.setLength(text.length() - 1);
+                text.append(" (units ").append(input.getMultiplier()).append(')');
+            }
+            text.append(" ->");
+            for (var output : pattern.getOutputs()) {
+                text.append(' ').append(output.what()).append(" x").append(output.amount());
+            }
+            text.append(System.lineSeparator());
+        }
+        text.append("stock ").append(names(this.stock));
+        return text.toString();
+    }
+
+    private static final class KeyType extends AEKeyType {
+        KeyType() {
+            super(new ResourceLocation("ae2test", "key"), TestKey.class, new TextComponentString("test"));
+        }
+
+        @Override
+        public @Nullable AEKey readFromPacket(PacketBuffer input) {
+            return null;
+        }
+
+        @Override
+        public @Nullable AEKey loadKeyFromTag(NBTTagCompound tag) {
+            return KEYS.get(tag.getString("name"));
+        }
+    }
+
     static final class TestKey extends AEKey {
         private final String name;
         private final Object group;
@@ -469,7 +586,7 @@ final class CraftingTestNetwork {
 
         @Override
         public boolean equals(Object o) {
-            return this == o;
+            return super.equals(o);
         }
 
         @Override
@@ -480,22 +597,6 @@ final class CraftingTestNetwork {
         @Override
         public String toString() {
             return this.name;
-        }
-    }
-
-    private static final class KeyType extends AEKeyType {
-        KeyType() {
-            super(new ResourceLocation("ae2test", "key"), TestKey.class, new TextComponentString("test"));
-        }
-
-        @Override
-        public @Nullable AEKey readFromPacket(PacketBuffer input) {
-            return null;
-        }
-
-        @Override
-        public @Nullable AEKey loadKeyFromTag(NBTTagCompound tag) {
-            return KEYS.get(tag.getString("name"));
         }
     }
 
@@ -517,9 +618,18 @@ final class CraftingTestNetwork {
                 for (int v = 0; v < names.length; v++) {
                     variants[v] = new GenericStack(key(names[v]), amount);
                 }
-                list.add(new Input(variants, containers));
+                list.add(new Input(variants, containers, 1));
             }
             this.inputs = list.toArray(new IInput[0]);
+            for (int i = 0; i < outputs.length; i += 2) {
+                this.outputs.add(new GenericStack(key((String) outputs[i]), ((Number) outputs[i + 1]).longValue()));
+            }
+        }
+
+        TestPattern(String name, AEItemKey definition, IInput[] inputs, Object[] outputs) {
+            this.name = name;
+            this.definition = definition;
+            this.inputs = inputs.clone();
             for (int i = 0; i < outputs.length; i += 2) {
                 this.outputs.add(new GenericStack(key((String) outputs[i]), ((Number) outputs[i + 1]).longValue()));
             }
@@ -544,9 +654,16 @@ final class CraftingTestNetwork {
         public String toString() {
             return this.name;
         }
+
+        @Override
+        public int hashCode() {
+            // CPU task iteration must be reproducible, including in independently constructed fixtures.
+            return this.name.hashCode();
+        }
     }
 
-    private record Input(GenericStack[] variants, Map<AEKey, AEKey> containers) implements IPatternDetails.IInput {
+    private record Input(GenericStack[] variants, Map<AEKey, AEKey> containers, long multiplier)
+        implements IPatternDetails.IInput {
         @Override
         public GenericStack[] possibleInputs() {
             return this.variants;
@@ -554,7 +671,7 @@ final class CraftingTestNetwork {
 
         @Override
         public long getMultiplier() {
-            return 1;
+            return multiplier;
         }
 
         @Override
@@ -573,7 +690,14 @@ final class CraftingTestNetwork {
         }
     }
 
-    private record Provider(TestPattern pattern, int priority) implements ICraftingProvider {
+    private static final class Provider implements ICraftingProvider {
+        private final IPatternDetails pattern;
+        private int priority;
+
+        Provider(IPatternDetails pattern, int priority) {
+            this.pattern = pattern;
+            this.priority = priority;
+        }
         @Override
         public List<? extends IPatternDetails> getAvailablePatterns() {
             return List.of(this.pattern);
@@ -593,35 +717,5 @@ final class CraftingTestNetwork {
         public boolean isBusy() {
             return false;
         }
-    }
-
-    String describe() {
-        var text = new StringBuilder();
-        for (var pattern : this.patterns) {
-            text.append(pattern).append(':');
-            for (var input : pattern.getInputs()) {
-                text.append(' ');
-                for (var possible : input.possibleInputs()) {
-                    text.append(possible.what()).append('|');
-                }
-                text.setLength(text.length() - 1);
-                text.append(" x").append(input.possibleInputs()[0].amount());
-            }
-            text.append(" ->");
-            for (var output : pattern.getOutputs()) {
-                text.append(' ').append(output.what()).append(" x").append(output.amount());
-            }
-            text.append(System.lineSeparator());
-        }
-        text.append("stock ").append(names(this.stock));
-        return text.toString();
-    }
-
-    static Set<String> names(KeyCounter counter) {
-        var names = new java.util.TreeSet<String>();
-        for (var entry : counter) {
-            names.add(entry.getKey() + " x" + entry.getLongValue());
-        }
-        return names;
     }
 }

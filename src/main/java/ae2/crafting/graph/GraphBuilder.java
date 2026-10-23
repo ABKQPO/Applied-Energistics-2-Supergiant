@@ -69,7 +69,8 @@ public class GraphBuilder {
         var primary = patterns.isEmpty() ? null : patterns.getFirst();
         IPatternDetails bestPattern = primary;
         double best = Double.POSITIVE_INFINITY;
-        for (var pattern : patterns) {
+        for (int patternIndex = 0, patternCount = patterns.size(); patternIndex < patternCount; patternIndex++) {
+            var pattern = patterns.get(patternIndex);
             if (pattern != primary && !isNativePattern(pattern)) continue;
             long made = candidateOutputAmount(what, pattern);
             if (made <= 0) continue;
@@ -173,7 +174,8 @@ public class GraphBuilder {
         }
 
         var primaryPattern = this.choices.getOrDefault(what, patterns.getFirst());
-        for (var pattern : patterns) {
+        for (int patternIndex = 0, patternCount = patterns.size(); patternIndex < patternCount; patternIndex++) {
+            var pattern = patterns.get(patternIndex);
             graph.recordPatternDefinition(pattern.getDefinition());
         }
         var nodeKey = new CraftingGraph.NodeKey(what, primaryPattern);
@@ -211,7 +213,8 @@ public class GraphBuilder {
         // The closure keeps the inputs of every candidate, the graph only those of the patterns it plans with
         var closureInputs = new Object2LongLinkedOpenHashMap<AEKey>();
         var candidates = new ObjectArrayList<MaterialClosure.Candidate>(patterns.size());
-        for (var pattern : patterns) {
+        for (int patternIndex = 0, patternCount = patterns.size(); patternIndex < patternCount; patternIndex++) {
+            var pattern = patterns.get(patternIndex);
             boolean planned = localUnit || pattern == primaryPattern;
             var patternInputs = new Object2LongLinkedOpenHashMap<AEKey>();
             for (var inputEntry : pattern.getInputs()) {
@@ -291,12 +294,14 @@ public class GraphBuilder {
         graph.addExtraSnapshotKey(what);
         calc.handlePausing();
         var patterns = calc.getCraftingFor(what);
-        for (var pattern : patterns) {
+        for (int patternIndex = 0, patternCount = patterns.size(); patternIndex < patternCount; patternIndex++) {
+            var pattern = patterns.get(patternIndex);
             graph.recordPatternDefinition(pattern.getDefinition());
         }
         var aggregated = new Object2LongLinkedOpenHashMap<AEKey>();
         var candidates = new ObjectArrayList<MaterialClosure.Candidate>(patterns.size());
-        for (var pattern : patterns) {
+        for (int patternIndex = 0, patternCount = patterns.size(); patternIndex < patternCount; patternIndex++) {
+            var pattern = patterns.get(patternIndex);
             var patternInputs = new Object2LongLinkedOpenHashMap<AEKey>();
             for (var input : pattern.getInputs()) {
                 if (input.getMultiplier() <= 0) {
@@ -327,7 +332,8 @@ public class GraphBuilder {
             collectFuzzyVariants(what, graph);
             return;
         }
-        for (var pattern : patterns) {
+        for (int patternIndex = 0, patternCount = patterns.size(); patternIndex < patternCount; patternIndex++) {
+            var pattern = patterns.get(patternIndex);
             for (var input : pattern.getInputs()) {
                 if (input.getMultiplier() <= 0) {
                     continue;

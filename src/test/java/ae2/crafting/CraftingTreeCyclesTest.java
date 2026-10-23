@@ -191,7 +191,7 @@ class CraftingTreeCyclesTest {
         assertEquals(1, ring.feedback().size());
         var fedBack = ring.feedback().keySet().iterator().next();
         var maker = ring.feedback().get(fedBack);
-        assertTrue(maker.inputs().size() > 0);
+        assertFalse(maker.inputs().isEmpty());
         // The round runs down the first column: each first input leads on to the input fed back
         var node = ring.root();
         int crafts = 0;

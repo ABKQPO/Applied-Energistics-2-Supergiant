@@ -1,7 +1,7 @@
 package ae2.integration.data;
 
 import ae2.api.crafting.IPatternDetails;
-import ae2.api.stacks.AEKey;
+import ae2.api.stacks.AEKey2LongMap;
 import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 import ae2.crafting.CraftingTreeNode;
@@ -318,7 +318,7 @@ public final class LiteCraftTreeNode implements Comparable<LiteCraftTreeNode> {
 
     public static final class PatternTimesAllocator {
         private final Object2LongOpenHashMap<IPatternDetails> remainingTimes = new Object2LongOpenHashMap<>();
-        private final Object2LongOpenHashMap<AEKey> remainingSelfReturningInputs = new Object2LongOpenHashMap<>();
+        private final AEKey2LongMap remainingSelfReturningInputs = new AEKey2LongMap.OpenHashMap();
 
         private PatternTimesAllocator(Object2LongMap<IPatternDetails> patternTimes) {
             remainingTimes.defaultReturnValue(0);
@@ -331,12 +331,8 @@ public final class LiteCraftTreeNode implements Comparable<LiteCraftTreeNode> {
         public PatternTimesAllocator(Object2LongMap<IPatternDetails> patternTimes, KeyCounter usedItems,
                                      KeyCounter missingItems) {
             this(patternTimes);
-            for (var entry : usedItems) {
-                remainingSelfReturningInputs.addTo(entry.getKey(), entry.getLongValue());
-            }
-            for (var entry : missingItems) {
-                remainingSelfReturningInputs.addTo(entry.getKey(), entry.getLongValue());
-            }
+            usedItems.forEach(remainingSelfReturningInputs::addTo);
+            missingItems.forEach(remainingSelfReturningInputs::addTo);
         }
 
         long allocate(CraftingTreeProcess process) {

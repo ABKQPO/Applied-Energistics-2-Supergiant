@@ -8,6 +8,7 @@ import it.unimi.dsi.fastutil.objects.Object2LongMaps;
 import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
 
 import java.util.Comparator;
+import java.util.function.ObjLongConsumer;
 
 /**
  * Custom extension to expose the increment function in a polymorphic way. We don't want to use
@@ -23,8 +24,40 @@ public interface AEKey2LongMap extends Object2LongMap<AEKey> {
      */
     long addTo(AEKey k, long incr);
 
+    /**
+     * Visits primitive amounts without boxed values. The callback must not add or remove keys from this map.
+     */
+    default void forEachEntry(ObjLongConsumer<? super AEKey> action) {
+        var iterator = Object2LongMaps.fastIterator(this);
+        while (iterator.hasNext()) {
+            var entry = iterator.next();
+            action.accept(entry.getKey(), entry.getLongValue());
+        }
+    }
+
     final class OpenHashMap extends Object2LongOpenHashMap<AEKey> implements AEKey2LongMap {
 
+        public OpenHashMap() {
+            super();
+        }
+
+        public OpenHashMap(int expected) {
+            super(expected);
+        }
+
+        public OpenHashMap(Object2LongMap<AEKey> inventory) {
+            super(inventory);
+        }
+
+        @Override
+        public void forEachEntry(ObjLongConsumer<? super AEKey> action) {
+            // Match the map iterator's order without allocating an iterator and a mutable entry per variant group.
+            if (containsNullKey) action.accept(null, value[n]);
+            Object[] keys = key;
+            for (int position = n; position-- != 0; ) {
+                if (keys[position] != null) action.accept((AEKey) keys[position], value[position]);
+            }
+        }
     }
 
     /**
@@ -60,14 +93,11 @@ public interface AEKey2LongMap extends Object2LongMap<AEKey> {
             } else {
                 AEKey current;
                 if ((current = (AEKey) keys[position = HashCommon.mix(key.hashCode()) & mask]) != null) {
-                    if (current.equals(key)) {
-                        return addToExisting(position, increment);
-                    }
-                    while ((current = (AEKey) keys[position = (position + 1) & mask]) != null) {
+                    do {
                         if (current.equals(key)) {
                             return addToExisting(position, increment);
                         }
-                    }
+                    } while ((current = (AEKey) keys[position = (position + 1) & mask]) != null);
                 }
             }
 

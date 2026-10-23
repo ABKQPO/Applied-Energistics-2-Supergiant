@@ -2,6 +2,7 @@ package ae2.crafting;
 
 import ae2.api.networking.crafting.CalculationStrategy;
 import ae2.api.networking.crafting.ICraftingPlan;
+import ae2.core.AEConfig;
 import ae2.core.localization.PlayerMessages;
 import org.junit.jupiter.api.Test;
 
@@ -21,6 +22,74 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * What the crafting calculation plans, checked against how a crafting CPU runs the plan.
  */
 class CraftingCalculationBehaviorTest {
+
+    private static void checkSubstitutedIntermediate(long stock) {
+        checkSubstitutedIntermediate(stock, "a|raw");
+    }
+
+    private static CraftingTestNetwork substitutionNetwork(int order, String alternatives) {
+        var net = new CraftingTestNetwork();
+        net.pattern("make-a-" + order, of("raw", 1), of("a", 1, "slag", 1));
+        net.pattern("make-b-" + order, of(alternatives, 1), of("b", 1, "slag", 1));
+        net.pattern("root-" + order, of("a", 1, "b", 1), of("result", 1));
+        return net;
+    }
+
+    private static void checkSubstitutedIntermediate(long stock, String alternatives) {
+        // Different stable hashes cover different CPU task orders. B may consume A's output before the root does.
+        for (int order = 0; order < 16; order++) {
+            var net = substitutionNetwork(order, alternatives);
+            net.store("raw", stock);
+
+            var plan = net.plan("result", 1);
+
+            assertEquals(0, total(plan.missingItems()),
+                "stock " + stock + ", order " + order + ", missing " + names(plan.missingItems()));
+            assertTrue(used(plan, "raw") <= stock);
+            assertEquals(0, used(plan, "a"));
+            assertRuns(plan);
+        }
+    }
+
+    @Test
+    void substitutedIntermediateIsCraftedInsteadOfReportedMissing() {
+        checkSubstitutedIntermediate(3);
+        checkSubstitutedIntermediate(2);
+    }
+
+    @Test
+    void substitutedIntermediateIsCraftedWithoutMemoCache() {
+        int previous = AEConfig.CRAFTING.memoizationCacheSize;
+        AEConfig.CRAFTING.memoizationCacheSize = 0;
+        try {
+            checkSubstitutedIntermediate(3);
+            checkSubstitutedIntermediate(2);
+        } finally {
+            AEConfig.CRAFTING.memoizationCacheSize = previous;
+        }
+    }
+
+    @Test
+    void unavailableAlternativeDoesNotBecomeAnExtraRequirement() {
+        checkSubstitutedIntermediate(2, "a|raw|absent");
+    }
+
+    @Test
+    void substitutionRepairReportsShortRawMaterialInsteadOfCraftableInputs() {
+        for (int order = 0; order < 16; order++) {
+            for (long stock = 0; stock <= 1; stock++) {
+                var net = substitutionNetwork(order, "a|raw");
+                net.store("raw", stock);
+
+                var plan = net.plan("result", 1);
+
+                assertTrue(missing(plan, "raw") > 0);
+                assertEquals(missing(plan, "raw"), total(plan.missingItems()));
+                assertTrue(used(plan, "raw") <= stock);
+                assertRuns(plan);
+            }
+        }
+    }
 
     private static void assertRuns(ICraftingPlan plan) {
         assertNull(replay(plan), () -> "plan does not run: crafts " + plan.patternTimes() + ", used "

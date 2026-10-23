@@ -1075,19 +1075,20 @@ public class TileMolecularAssembler extends AENetworkedTile implements IUpgradea
         result.add(new GenericStack(outputStack.what(), outputStack.amount() * multiplier));
         var inputs = assemblerPattern.getInputs();
         for (int i = 0; i < Math.min(inputs.length, inputHolder.length); i++) {
-            for (var entry : inputHolder[i]) {
-                var remainder = inputs[i].getRemainingKey(entry.getKey());
+            var input = inputs[i];
+            inputHolder[i].forEach((key, amount) -> {
+                var remainder = input.getRemainingKey(key);
                 if (remainder == null) {
-                    continue;
+                    return;
                 }
-                long templateAmount = getTemplateAmount(inputs[i], entry.getKey());
+                long templateAmount = getTemplateAmount(input, key);
                 if (templateAmount > 0) {
-                    long remainingAmount = entry.getLongValue() / templateAmount;
+                    long remainingAmount = amount / templateAmount;
                     if (remainingAmount > 0) {
                         result.add(new GenericStack(remainder, remainingAmount));
                     }
                 }
-            }
+            });
         }
         return result;
     }
@@ -1136,11 +1137,11 @@ public class TileMolecularAssembler extends AENetworkedTile implements IUpgradea
     private ObjectList<GenericStack> collectInputs(KeyCounter[] inputHolder) {
         ObjectList<GenericStack> result = new ObjectArrayList<>();
         for (var counter : inputHolder) {
-            for (var entry : counter) {
-                if (entry.getLongValue() > 0) {
-                    result.add(new GenericStack(entry.getKey(), entry.getLongValue()));
+            counter.forEach((entryKey, entryAmount) -> {
+                if (entryAmount > 0) {
+                    result.add(new GenericStack(entryKey, entryAmount));
                 }
-            }
+            });
         }
         return result;
     }

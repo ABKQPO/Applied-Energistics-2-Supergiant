@@ -3,12 +3,12 @@ package ae2.crafting.graph;
 import ae2.api.config.Actionable;
 import ae2.api.stacks.KeyCounter;
 import ae2.crafting.CraftingCalculation;
-import com.google.common.math.LongMath;
 import ae2.crafting.inv.CraftingSimulationState;
-import org.jetbrains.annotations.Nullable;
+import com.google.common.math.LongMath;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.objects.Reference2LongOpenHashMap;
 import it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap;
+import org.jetbrains.annotations.Nullable;
 
 public class DemandPropagation {
     private final CraftingCalculation calculation;
@@ -176,11 +176,11 @@ public class DemandPropagation {
         if (plan == null) return;
         var sccPlan = graph.getSccPlan(component.id());
         var boundaryDemands = sccPlan == null ? plan.boundaryDemands() : sccPlan.boundaryDemands();
-        for (var boundary : boundaryDemands) {
-            long remaining = boundary.getLongValue();
+        boundaryDemands.forEach((entryKey, entryAmount) -> {
+            long remaining = entryAmount;
             for (var node : component.nodes()) {
                 for (var edge : node.getInputs()) {
-                    if (edge.inputKey().equals(boundary.getKey()) && edge.producer() != null
+                    if (edge.inputKey().equals(entryKey) && edge.producer() != null
                         && topology.getComponentId(edge.producer()) != component.id()) {
                         edge.producer().addDemandAmount(remaining);
                         remaining = 0;
@@ -189,21 +189,21 @@ public class DemandPropagation {
                 }
                 if (remaining == 0) break;
             }
-        }
+        });
     }
 
     private static void propagateLocalUnitBoundary(CraftingGraphNode node) {
         if (!node.isLocalUnit()) return;
         var planned = node.getPlannedBoundaryDemands();
         if (planned == null) return;
-        for (var boundary : planned) {
+        planned.forEach((entryKey, entryAmount) -> {
             for (var edge : node.getInputs()) {
-                if (edge.inputKey().equals(boundary.getKey()) && edge.producer() != null) {
-                    edge.producer().addDemandAmount(boundary.getLongValue());
+                if (edge.inputKey().equals(entryKey) && edge.producer() != null) {
+                    edge.producer().addDemandAmount(entryAmount);
                     break;
                 }
             }
-        }
+        });
     }
 
     private static long divideCeil(long dividend, long divisor) {

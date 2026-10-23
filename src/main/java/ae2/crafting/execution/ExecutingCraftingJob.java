@@ -107,10 +107,10 @@ public class ExecutingCraftingJob {
 
         // Fill waiting for and tasks
         this.timeTracker = new ElapsedTimeTracker();
-        for (var entry : plan.emittedItems()) {
-            waitingFor.insert(entry.getKey(), entry.getLongValue(), Actionable.MODULATE);
-            timeTracker.addMaxItems(entry.getLongValue(), entry.getKey().getType());
-        }
+        plan.emittedItems().forEach((entryKey, entryAmount) -> {
+            waitingFor.insert(entryKey, entryAmount, Actionable.MODULATE);
+            timeTracker.addMaxItems(entryAmount, entryKey.getType());
+        });
         for (Object2LongMap.Entry<IPatternDetails> entry : plan.patternTimes().object2LongEntrySet()) {
             tasks.computeIfAbsent(entry.getKey(), ignored -> new TaskProgress()).value += entry.getLongValue();
             for (var output : entry.getKey().getOutputs()) {
@@ -289,11 +289,11 @@ public class ExecutingCraftingJob {
         }
     }
 
-    private void addWaitingFor(Iterable<Object2LongMap.Entry<AEKey>> entries) {
-        for (var entry : entries) {
-            waitingFor.insert(entry.getKey(), entry.getLongValue(), Actionable.MODULATE);
-            timeTracker.addMaxItems(entry.getLongValue(), entry.getKey().getType());
-        }
+    private void addWaitingFor(KeyCounter entries) {
+        entries.forEach((key, amount) -> {
+            waitingFor.insert(key, amount, Actionable.MODULATE);
+            timeTracker.addMaxItems(amount, key.getType());
+        });
     }
 
     private void addTasks(ICraftingPlan plan) {

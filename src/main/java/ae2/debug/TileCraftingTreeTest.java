@@ -157,9 +157,9 @@ public final class TileCraftingTreeTest extends AENetworkedTile implements ICraf
         return stack;
     }
 
-    private void generateTree() {
-        this.patterns.clear();
-        SplitMix64 random = new SplitMix64(this.seed);
+    // Keep the generator independent of the tile lifecycle so benchmarks can use the exact in-game workload.
+    private static void generatePatterns(long seed, List<IPatternDetails> patterns) {
+        SplitMix64 random = new SplitMix64(seed);
         AEItemKey[] outputs = new AEItemKey[PATTERN_COUNT];
 
         for (int node = 0; node < PATTERN_COUNT; node++) {
@@ -187,10 +187,15 @@ public final class TileCraftingTreeTest extends AENetworkedTile implements ICraf
             AEItemKey outputKey = Objects.requireNonNull(
                 AEItemKey.of(root ? endStack() : markerStack(node, true)));
             GenericStack output = new GenericStack(outputKey, 1);
-            this.patterns.add(new TestPattern(definition, inputs, output));
+            patterns.add(new TestPattern(definition, inputs, output));
             outputs[node] = outputKey;
         }
 
+    }
+
+    private void generateTree() {
+        this.patterns.clear();
+        generatePatterns(this.seed, this.patterns);
         this.generated = true;
         this.saveChanges();
         AELog.info("Generated crafting tree test seed=%d definitions=%d logicalNodes=%d maxDepth=%d rootInputs=%d",
@@ -213,26 +218,26 @@ public final class TileCraftingTreeTest extends AENetworkedTile implements ICraf
     }
 
     private record TestInput(GenericStack[] possibleInputs) implements IPatternDetails.IInput {
-            private TestInput(GenericStack input) {
-                this(new GenericStack[]{input});
-            }
-
-            @Override
-            public long getMultiplier() {
-                return 1;
-            }
-
-            @Override
-            public boolean isValid(AEKey input, World level) {
-                return input.equals(this.possibleInputs[0].what());
-            }
-
-            @Nullable
-            @Override
-            public AEKey getRemainingKey(AEKey template) {
-                return null;
-            }
+        private TestInput(GenericStack input) {
+            this(new GenericStack[]{input});
         }
+
+        @Override
+        public long getMultiplier() {
+            return 1;
+        }
+
+        @Override
+        public boolean isValid(AEKey input, World level) {
+            return input.equals(this.possibleInputs[0].what());
+        }
+
+        @Nullable
+        @Override
+        public AEKey getRemainingKey(AEKey template) {
+            return null;
+        }
+    }
 
     @SuppressWarnings("ClassCanBeRecord")
     private static final class TestPattern implements IPatternDetails {

@@ -5,12 +5,11 @@ import ae2.api.stacks.KeyCounter;
 import ae2.crafting.CraftingCalculation;
 import ae2.crafting.inv.CraftingSimulationDiff;
 import ae2.crafting.inv.CraftingSimulationState;
-import it.unimi.dsi.fastutil.objects.ObjectArrayList;
-import it.unimi.dsi.fastutil.objects.ObjectLists;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import it.unimi.dsi.fastutil.objects.Reference2LongOpenHashMap;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -31,7 +30,7 @@ public final class LocalComponentPlan {
                               CraftingSimulationDiff diff, CraftingCalculation.CalculationDelta delta) {
         // Entries are built by the caller and never shared afterwards; a single shallow freeze is enough.
         // Each LocalDisplayFragment is an immutable record already frozen by its compact constructor.
-        this.entries = ObjectLists.unmodifiable(new ObjectArrayList<>(entries));
+        this.entries = Collections.unmodifiableList(entries);
         this.boundaryDemands = copy(boundaryDemands);
         this.diff = diff;
         this.delta = copy(delta);

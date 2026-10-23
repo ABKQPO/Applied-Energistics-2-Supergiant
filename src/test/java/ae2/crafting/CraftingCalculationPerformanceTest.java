@@ -5,6 +5,7 @@ import ae2.core.AEConfig;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Random;
 import java.util.function.Supplier;
 
@@ -125,7 +126,7 @@ class CraftingCalculationPerformanceTest {
                 for (int v = 0; v < (alternatives ? 2 : 1); v++) {
                     int count = 2 + random.nextInt(3);
                     var in = new Object[count * 2];
-                    var used = new java.util.HashSet<Integer>();
+                    var used = new HashSet<Integer>();
                     for (int c = 0; c < count; c++) {
                         int from;
                         do {
@@ -202,16 +203,24 @@ class CraftingCalculationPerformanceTest {
     @Test
     void legacyTreeGrowsLinearly() {
         legacyNetwork(30, 40).plan("lroot30", 1);
-        var small = new long[1];
-        var large = new long[1];
-        var smallPlan = timed("legacy tree, 40 patterns per layer", small, () -> legacyNetwork(31, 40).plan("lroot31", 1));
-        var largePlan = timed("legacy tree, 160 patterns per layer", large,
-            () -> legacyNetwork(32, 160).plan("lroot32", 1));
-
-        assertRuns(smallPlan);
-        assertRuns(largePlan);
-        assertTrue(large[0] < Math.max(small[0], 20_000_000L) * 10,
-            () -> "4x the patterns took " + (double) large[0] / small[0] + "x the time");
+        legacyNetwork(30, 160).plan("lroot30", 1);
+        var small = new long[3];
+        var large = new long[3];
+        for (int i = 0; i < small.length; i++) {
+            var smallNetwork = legacyNetwork(31, 40);
+            var largeNetwork = legacyNetwork(32, 160);
+            var plans = new ICraftingPlan[2];
+            small[i] = nanos(() -> plans[0] = smallNetwork.plan("lroot31", 1));
+            large[i] = nanos(() -> plans[1] = largeNetwork.plan("lroot32", 1));
+            for (var plan : plans) {
+                assertEquals(0, total(plan.missingItems()), () -> "missing " + names(plan.missingItems()));
+                assertRuns(plan);
+            }
+        }
+        System.out.printf("legacy tree: 40/layer median %.1f ms, 160/layer median %.1f ms%n",
+            median(small) / 1e6, median(large) / 1e6);
+        assertTrue(median(large) < Math.max(median(small), 20_000_000L) * 10,
+            () -> "4x the patterns took " + (double) median(large) / median(small) + "x the time");
     }
 
     @Test

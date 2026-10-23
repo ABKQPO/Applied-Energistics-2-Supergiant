@@ -50,9 +50,7 @@ public interface IPatternDetails {
 
     default void pushInputsToExternalInventory(KeyCounter[] inputHolder, PatternInputSink inputSink) {
         for (var inputList : inputHolder) {
-            for (var input : inputList) {
-                inputSink.pushInput(input.getKey(), input.getLongValue());
-            }
+            inputList.forEach(inputSink::pushInput);
         }
     }
 

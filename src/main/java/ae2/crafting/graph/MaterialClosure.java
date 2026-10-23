@@ -224,9 +224,7 @@ public final class MaterialClosure {
                 visit(this.queue.pollFirst());
             }
             // Cyclic structures never drain their parents: keep their keys instead of pruning them.
-            for (var key : this.reachable) {
-                this.subset.add(key);
-            }
+            this.subset.addAll(this.reachable);
             return this.subset;
         }
 
@@ -269,7 +267,7 @@ public final class MaterialClosure {
                     // The smallest candidate yield asks for the most crafts, keeping the demand an upper bound.
                     long outputPerCraft = Long.MAX_VALUE;
                     for (var candidate : node.candidates()) {
-                        outputPerCraft = Math.min(outputPerCraft, Math.max(1, candidate.outputPerCraft()));
+                        outputPerCraft = Math.clamp(candidate.outputPerCraft(), 1, outputPerCraft);
                     }
                     if (outputPerCraft == Long.MAX_VALUE) {
                         outputPerCraft = 1;

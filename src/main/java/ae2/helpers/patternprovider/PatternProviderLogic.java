@@ -81,7 +81,6 @@ import ae2.util.inv.InternalInventoryHost;
 import ae2.util.inv.PlayerInternalInventory;
 import ae2.util.inv.filter.IAEItemFilter;
 import com.google.common.math.LongMath;
-import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
@@ -110,6 +109,7 @@ import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
 import net.minecraftforge.common.util.Constants;
 import org.jetbrains.annotations.Nullable;
+import org.jspecify.annotations.NonNull;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -555,8 +555,7 @@ public class PatternProviderLogic implements InternalInventoryHost, ICraftingPro
         return getInsertionMode() != PatternProviderInsertionMode.EMPTY_ONLY;
     }
 
-    @Nullable
-    private PushTargetSet collectPushTargets() {
+    private @NonNull PushTargetSet collectPushTargets() {
         ObjectList<MachinePushTarget> machineTargets = new ObjectArrayList<>();
         ObjectList<ExternalTarget> externalTargets = new ObjectArrayList<>();
         TileEntity blockEntity = this.host.getTileEntity();
@@ -879,16 +878,17 @@ public class PatternProviderLogic implements InternalInventoryHost, ICraftingPro
     private Reference2ObjectMap<AEKeyType, KeyCounter[]> splitInputsByType(KeyCounter[] inputHolder) {
         Reference2ObjectMap<AEKeyType, KeyCounter[]> result = new Reference2ObjectOpenHashMap<>();
         for (int slot = 0; slot < inputHolder.length; slot++) {
-            for (Object2LongMap.Entry<AEKey> input : inputHolder[slot]) {
-                KeyCounter[] perTypeInput = result.computeIfAbsent(input.getKey().getType(), ignored -> {
+            int inputSlot = slot;
+            inputHolder[slot].forEach((key, amount) -> {
+                KeyCounter[] perTypeInput = result.computeIfAbsent(key.getType(), ignored -> {
                     KeyCounter[] counters = new KeyCounter[inputHolder.length];
                     for (int i = 0; i < counters.length; i++) {
                         counters[i] = new KeyCounter();
                     }
                     return counters;
                 });
-                perTypeInput[slot].add(input.getKey(), input.getLongValue());
-            }
+                perTypeInput[inputSlot].add(key, amount);
+            });
         }
         return result;
     }

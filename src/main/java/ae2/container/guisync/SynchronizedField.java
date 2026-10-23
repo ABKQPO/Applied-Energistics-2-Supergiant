@@ -34,6 +34,7 @@ import java.lang.invoke.VarHandle;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Objects;
@@ -42,9 +43,9 @@ import java.util.function.BiFunction;
 /**
  * Synchronizes one field of a container to its client.
  *
- * <p>The field is accessed through one {@link VarHandle}. This keeps access to
- * primitive and reference fields in the same code path, while the concrete
- * field implementations remain responsible for their wire representation.</p>
+ * <p>The field is accessed through one {@link VarHandle}. Primitive field
+ * implementations use typed access and primitive client snapshots to avoid
+ * boxing during change detection and serialization.</p>
  */
 public abstract class SynchronizedField {
     private static final int MAX_STRING_BYTES = 4096;
@@ -55,13 +56,13 @@ public abstract class SynchronizedField {
     static {
         register(String.class, StringField::new);
         register(int.class, IntegerField::new);
-        register(Integer.class, IntegerField::new);
+        register(Integer.class, BoxedIntegerField::new);
         register(long.class, LongField::new);
-        register(Long.class, LongField::new);
+        register(Long.class, BoxedLongField::new);
         register(double.class, DoubleField::new);
-        register(Double.class, DoubleField::new);
+        register(Double.class, BoxedDoubleField::new);
         register(boolean.class, BooleanField::new);
-        register(Boolean.class, BooleanField::new);
+        register(Boolean.class, BoxedBooleanField::new);
         register(ITextComponent.class, TextComponentField::new);
         register(GenericStack.class, GenericStackField::new);
         register(ResourceLocation.class, ResourceLocationField::new);
@@ -69,8 +70,8 @@ public abstract class SynchronizedField {
         register(Enum.class, EnumField::new);
     }
 
-    private final Object source;
-    private final VarHandle varHandle;
+    protected final Object source;
+    protected final VarHandle varHandle;
     private Object clientVersion;
 
     /**
@@ -126,6 +127,9 @@ public abstract class SynchronizedField {
     }
 
     private static VarHandle createVarHandle(Field field) {
+        if (Modifier.isFinal(field.getModifiers())) {
+            throw new IllegalArgumentException("Cannot synchronize final field " + field);
+        }
         field.setAccessible(true);
         try {
             var lookup = MethodHandles.privateLookupIn(field.getDeclaringClass(), MethodHandles.lookup());
@@ -167,16 +171,16 @@ public abstract class SynchronizedField {
         }
     }
 
-    public final boolean hasChanges() {
+    public boolean hasChanges() {
         return !Objects.equals(get(), this.clientVersion);
     }
 
-    public final void write(ByteBuf data) {
+    public void write(ByteBuf data) {
         this.clientVersion = get();
         writeValue(data);
     }
 
-    public final void read(ByteBuf data) {
+    public void read(ByteBuf data) {
         readValue(data);
         this.clientVersion = get();
     }
@@ -184,7 +188,9 @@ public abstract class SynchronizedField {
     /** Writes the current value using this field's wire representation. */
     protected abstract void writeValue(ByteBuf data);
 
-    /** Reads a value and stores it using {@link #set(Object)}. */
+    /**
+     * Reads a value and stores it in the source field.
+     */
     protected abstract void readValue(ByteBuf data);
 
     private static void writeString(ByteBuf data, String value) {
@@ -223,8 +229,71 @@ public abstract class SynchronizedField {
         }
     }
 
-    private static final class IntegerField extends SynchronizedField {
+    private abstract static class PrimitiveField extends SynchronizedField {
+        protected boolean hasClientVersion;
+
+        private PrimitiveField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
+        }
+
+        @Override
+        public final void write(ByteBuf data) {
+            writeValue(data);
+            this.hasClientVersion = true;
+        }
+
+        @Override
+        public final void read(ByteBuf data) {
+            readValue(data);
+            this.hasClientVersion = true;
+        }
+    }
+
+    private static final class IntegerField extends PrimitiveField {
+        private int clientVersion;
+
         private IntegerField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
+        }
+
+        private int getInt() {
+            try {
+                return (int) this.varHandle.get(this.source);
+            } catch (Throwable throwable) {
+                throw new RuntimeException("Failed to read synchronized field", throwable);
+            }
+        }
+
+        private void setInt(int value) {
+            try {
+                this.varHandle.set(this.source, value);
+            } catch (Throwable throwable) {
+                throw new RuntimeException("Failed to write synchronized field", throwable);
+            }
+        }
+
+        @Override
+        public boolean hasChanges() {
+            return !this.hasClientVersion || getInt() != this.clientVersion;
+        }
+
+        @Override
+        protected void writeValue(ByteBuf data) {
+            int value = getInt();
+            data.writeInt(value);
+            this.clientVersion = value;
+        }
+
+        @Override
+        protected void readValue(ByteBuf data) {
+            int value = data.readInt();
+            setInt(value);
+            this.clientVersion = value;
+        }
+    }
+
+    private static final class BoxedIntegerField extends SynchronizedField {
+        private BoxedIntegerField(Object source, VarHandle varHandle) {
             super(source, varHandle);
         }
 
@@ -239,8 +308,51 @@ public abstract class SynchronizedField {
         }
     }
 
-    private static final class LongField extends SynchronizedField {
+    private static final class LongField extends PrimitiveField {
+        private long clientVersion;
+
         private LongField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
+        }
+
+        private long getLong() {
+            try {
+                return (long) this.varHandle.get(this.source);
+            } catch (Throwable throwable) {
+                throw new RuntimeException("Failed to read synchronized field", throwable);
+            }
+        }
+
+        private void setLong(long value) {
+            try {
+                this.varHandle.set(this.source, value);
+            } catch (Throwable throwable) {
+                throw new RuntimeException("Failed to write synchronized field", throwable);
+            }
+        }
+
+        @Override
+        public boolean hasChanges() {
+            return !this.hasClientVersion || getLong() != this.clientVersion;
+        }
+
+        @Override
+        protected void writeValue(ByteBuf data) {
+            long value = getLong();
+            data.writeLong(value);
+            this.clientVersion = value;
+        }
+
+        @Override
+        protected void readValue(ByteBuf data) {
+            long value = data.readLong();
+            setLong(value);
+            this.clientVersion = value;
+        }
+    }
+
+    private static final class BoxedLongField extends SynchronizedField {
+        private BoxedLongField(Object source, VarHandle varHandle) {
             super(source, varHandle);
         }
 
@@ -255,8 +367,53 @@ public abstract class SynchronizedField {
         }
     }
 
-    private static final class DoubleField extends SynchronizedField {
+    private static final class DoubleField extends PrimitiveField {
+        private double clientVersion;
+
         private DoubleField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
+        }
+
+        private double getDouble() {
+            try {
+                return (double) this.varHandle.get(this.source);
+            } catch (Throwable throwable) {
+                throw new RuntimeException("Failed to read synchronized field", throwable);
+            }
+        }
+
+        private void setDouble(double value) {
+            try {
+                this.varHandle.set(this.source, value);
+            } catch (Throwable throwable) {
+                throw new RuntimeException("Failed to write synchronized field", throwable);
+            }
+        }
+
+        @Override
+        public boolean hasChanges() {
+            // Match Double.equals: all NaNs are equal, but signed zeros differ.
+            return !this.hasClientVersion
+                || Double.doubleToLongBits(getDouble()) != Double.doubleToLongBits(this.clientVersion);
+        }
+
+        @Override
+        protected void writeValue(ByteBuf data) {
+            double value = getDouble();
+            data.writeDouble(value);
+            this.clientVersion = value;
+        }
+
+        @Override
+        protected void readValue(ByteBuf data) {
+            double value = data.readDouble();
+            setDouble(value);
+            this.clientVersion = value;
+        }
+    }
+
+    private static final class BoxedDoubleField extends SynchronizedField {
+        private BoxedDoubleField(Object source, VarHandle varHandle) {
             super(source, varHandle);
         }
 
@@ -271,8 +428,51 @@ public abstract class SynchronizedField {
         }
     }
 
-    private static final class BooleanField extends SynchronizedField {
+    private static final class BooleanField extends PrimitiveField {
+        private boolean clientVersion;
+
         private BooleanField(Object source, VarHandle varHandle) {
+            super(source, varHandle);
+        }
+
+        private boolean getBoolean() {
+            try {
+                return (boolean) this.varHandle.get(this.source);
+            } catch (Throwable throwable) {
+                throw new RuntimeException("Failed to read synchronized field", throwable);
+            }
+        }
+
+        private void setBoolean(boolean value) {
+            try {
+                this.varHandle.set(this.source, value);
+            } catch (Throwable throwable) {
+                throw new RuntimeException("Failed to write synchronized field", throwable);
+            }
+        }
+
+        @Override
+        public boolean hasChanges() {
+            return !this.hasClientVersion || getBoolean() != this.clientVersion;
+        }
+
+        @Override
+        protected void writeValue(ByteBuf data) {
+            boolean value = getBoolean();
+            data.writeBoolean(value);
+            this.clientVersion = value;
+        }
+
+        @Override
+        protected void readValue(ByteBuf data) {
+            boolean value = data.readBoolean();
+            setBoolean(value);
+            this.clientVersion = value;
+        }
+    }
+
+    private static final class BoxedBooleanField extends SynchronizedField {
+        private BoxedBooleanField(Object source, VarHandle varHandle) {
             super(source, varHandle);
         }
 

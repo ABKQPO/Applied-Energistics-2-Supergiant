@@ -93,11 +93,10 @@ public class BasicCellHandler implements ICellHandler {
         List<GenericStack> content;
         boolean hasMoreContent;
         if (AEConfig.instance().isTooltipShowCellContent()) {
-            content = new ObjectArrayList<>();
+            var availableContent = new ObjectArrayList<GenericStack>();
+            content = availableContent;
             int maxCountShown = AEConfig.instance().getTooltipMaxCellContentShown();
-            for (var entry : inventory.getAvailableStacks()) {
-                content.add(new GenericStack(entry.getKey(), entry.getLongValue()));
-            }
+            inventory.getAvailableStacks().forEach((key, amount) -> availableContent.add(new GenericStack(key, amount)));
             content.sort(Comparator.comparingLong(GenericStack::amount).reversed()
                 .thenComparing(entry -> entry.what().getDisplayName().getFormattedText()));
 

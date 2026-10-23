@@ -1,16 +1,19 @@
 package ae2.core.network.clientbound;
 
 import ae2.api.networking.IGrid;
+import ae2.api.networking.IInWorldGridNodeHost;
 import ae2.api.networking.energy.IEnergyService;
 import ae2.api.networking.pathing.IPathingService;
 import ae2.api.stacks.AEItemKey;
 import ae2.container.implementations.ContainerNetworkStatus;
 import ae2.container.networking.NetworkStatus;
+import ae2.core.AEConfig;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import net.minecraft.init.Bootstrap;
 import net.minecraft.init.Items;
 import net.minecraft.network.PacketBuffer;
+import net.minecraft.util.EnumFacing;
 import org.junit.jupiter.api.Test;
 import sun.misc.Unsafe;
 
@@ -121,6 +124,40 @@ class NetworkStatusIdentityTest {
         assertTrue(container.acceptStatusIdentity(77, 11, 1));
         assertFalse(container.acceptStatusIdentity(77, 10, 10));
         assertFalse(container.acceptStatusIdentity(76, 12, 1));
+    }
+
+    @Test
+    void serverSourceChangesAllocateNewGenerationsAndResetRevision() throws Exception {
+        var configField = AEConfig.class.getDeclaredField("INSTANCE");
+        configField.setAccessible(true);
+        var previousConfig = configField.get(null);
+        if (previousConfig == null) configField.set(null, allocate(AEConfig.class));
+        try {
+            var container = allocate(ContainerNetworkStatus.class);
+            var host = (IInWorldGridNodeHost) Proxy.newProxyInstance(getClass().getClassLoader(),
+                new Class<?>[]{IInWorldGridNodeHost.class}, (_, method, _) -> primitiveDefault(method));
+            field(container, "gridHost").set(container, host);
+            field(container, "gridSide").set(container, EnumFacing.NORTH);
+            var resolve = ContainerNetworkStatus.class.getDeclaredMethod("resolveCurrentGrid");
+            resolve.setAccessible(true);
+
+            field(container, "grid").set(container, emptyGridProxy());
+            field(container, "statusRevision").setLong(container, 42);
+            resolve.invoke(container);
+            long first = longField(container, "statusGeneration");
+            assertTrue(first > 0);
+            assertEquals(0, longField(container, "statusRevision"));
+            resolve.invoke(container);
+            assertEquals(first, longField(container, "statusGeneration"));
+
+            field(container, "grid").set(container, emptyGridProxy());
+            field(container, "statusRevision").setLong(container, 9);
+            resolve.invoke(container);
+            assertTrue(longField(container, "statusGeneration") > first);
+            assertEquals(0, longField(container, "statusRevision"));
+        } finally {
+            configField.set(null, previousConfig);
+        }
     }
 
     @Test

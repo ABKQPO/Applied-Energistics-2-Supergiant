@@ -93,7 +93,7 @@ public final class CraftingTreeCycleView {
                            .computeIfAbsent(proc.cycle(), ignored -> new ObjectArrayList<>())
                            .add(proc);
                 }
-                for (var input : proc.inputs()) pending.add(input);
+                pending.addAll(proc.inputs());
             }
         }
         for (var entry : grouped.entrySet()) {

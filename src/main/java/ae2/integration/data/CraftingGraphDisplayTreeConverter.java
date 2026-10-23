@@ -349,9 +349,7 @@ public final class CraftingGraphDisplayTreeConverter {
         private final Object2LongOpenHashMap<AEKey> remaining = new Object2LongOpenHashMap<>();
 
         private MissingAllocator(KeyCounter missingItems) {
-            for (var entry : missingItems) {
-                remaining.put(entry.getKey(), entry.getLongValue());
-            }
+            missingItems.forEach(remaining::put);
         }
 
         private long allocate(AEKey key, long requested) {

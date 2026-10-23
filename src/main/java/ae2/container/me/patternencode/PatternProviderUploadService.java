@@ -27,19 +27,37 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.world.World;
 import org.jetbrains.annotations.Nullable;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicLong;
 
 public final class PatternProviderUploadService {
     private static final long WARNING_INTERVAL_NANOS = 10_000_000_000L;
     private static final int MAX_PROVIDER_ACTION_WARNING_KEYS = 256;
     private static final ProviderActionWarningLimiter PROVIDER_ACTION_WARNING_LIMITER =
         new ProviderActionWarningLimiter(MAX_PROVIDER_ACTION_WARNING_KEYS, WARNING_INTERVAL_NANOS);
-    private static final AtomicLong LAST_PROVIDER_SCAN_WARNING = new AtomicLong(Long.MIN_VALUE);
-    private static final AtomicLong LAST_PROVIDER_UPLOAD_WARNING = new AtomicLong(Long.MIN_VALUE);
+    private static final VarHandle LAST_PROVIDER_SCAN_WARNING;
+    private static final VarHandle LAST_PROVIDER_UPLOAD_WARNING;
+    // Updated atomically through the VarHandles above.
+    @SuppressWarnings("FieldMayBeFinal")
+    private static volatile long lastProviderScanWarning = Long.MIN_VALUE;
+    @SuppressWarnings("FieldMayBeFinal")
+    private static volatile long lastProviderUploadWarning = Long.MIN_VALUE;
+
+    static {
+        try {
+            var lookup = MethodHandles.lookup();
+            LAST_PROVIDER_SCAN_WARNING = lookup.findStaticVarHandle(PatternProviderUploadService.class,
+                "lastProviderScanWarning", long.class);
+            LAST_PROVIDER_UPLOAD_WARNING = lookup.findStaticVarHandle(PatternProviderUploadService.class,
+                "lastProviderUploadWarning", long.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
 
     private PatternProviderUploadService() {
     }
@@ -353,11 +371,11 @@ public final class PatternProviderUploadService {
         }
     }
 
-    private static boolean shouldLog(AtomicLong lastWarning) {
+    private static boolean shouldLog(VarHandle lastWarning) {
         Objects.requireNonNull(lastWarning, "lastWarning");
         long now = System.nanoTime();
         while (true) {
-            long previous = lastWarning.get();
+            long previous = (long) lastWarning.getVolatile();
             if (previous != Long.MIN_VALUE && now - previous < WARNING_INTERVAL_NANOS) {
                 return false;
             }

@@ -25,7 +25,6 @@ public final class AEItemKey extends AEKey {
     private final ItemStack stack;
     private final int hashCode;
     private final int maxStackSize;
-    private final int damage;
 
     private AEItemKey(ItemStack stack) {
         Preconditions.checkArgument(!stack.isEmpty(), "stack is empty");
@@ -33,7 +32,6 @@ public final class AEItemKey extends AEKey {
         this.stack.setCount(1);
         this.hashCode = hashStack(stack);
         this.maxStackSize = stack.getMaxStackSize();
-        this.damage = stack.getItemDamage();
     }
 
     @Nullable
@@ -169,7 +167,7 @@ public final class AEItemKey extends AEKey {
 
     @Override
     public int getFuzzySearchValue() {
-        return this.damage;
+        return this.stack.getItemDamage();
     }
 
     @Override
@@ -254,7 +252,7 @@ public final class AEItemKey extends AEKey {
     }
 
     public boolean isDamaged() {
-        return damage > 0;
+        return stack.isItemDamaged();
     }
 
     public int getMaxStackSize() {
