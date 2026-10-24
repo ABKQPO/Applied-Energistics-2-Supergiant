@@ -19,12 +19,11 @@ import java.util.UUID;
  * <p>The simulated player is anonymous on purpose: it has no inventory contents and its position is unset. Its
  * world is a {@link SimulatedCraftingWorld}, a server-side stand-in that reports {@code isRemote == true}, so
  * mods which gate their side effects on the client/server distinction stay out of the way instead of running
- * server-side logic for a craft that never happened. A mod that ignores that distinction still cannot reach the
- * live level, because every read on the simulated world answers empty and every write is discarded.</p>
+ * server-side logic for a craft that never happened. This is not a sandbox: callbacks can still reach the real
+ * server through the simulated world or their own globals.</p>
  *
- * <p>The player and its world are created once per server and shared by all callers, on the game thread and on
- * crafting calculation threads alike. Neither is mutated after construction apart from the player's world
- * reference, which every call re-asserts to the same value.</p>
+ * <p>The player and its world are created once per server. Calculation workers hand callbacks to the tick thread,
+ * serializing recipe and event access with ordinary game-thread callers.</p>
  */
 public final class CraftingEventSimulation {
     private static final GameProfile SIMULATED_PLAYER_PROFILE =
@@ -46,6 +45,9 @@ public final class CraftingEventSimulation {
      *                          cannot be encoded/produced"
      */
     public static ItemStack processCraftingResult(ItemStack output, InventoryCrafting input, World world) {
+        if (CraftingCalculation.isCalculationThread()) {
+            return CraftingCalculation.runOnMainThread(() -> processCraftingResult(output, input, world));
+        }
         Objects.requireNonNull(output, "output");
         Objects.requireNonNull(input, "input");
         if (!(world instanceof WorldServer worldServer)) {
@@ -86,7 +88,7 @@ public final class CraftingEventSimulation {
             }
         }
         // Re-asserted on every call: idempotent, cheap, and it heals a world reference left dirty by a listener.
-        // Callers run on calculation threads as well as the game thread, so this must stay free of side effects.
+        // Calculation callbacks have already been handed to the game thread.
         player.world = simulatedWorld;
         player.dimension = simulatedWorld.provider.getDimension();
         return player;

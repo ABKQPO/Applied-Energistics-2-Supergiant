@@ -334,7 +334,7 @@ public class ContainerMEStorage extends AEBaseContainer
                 availableStacks = storage.getAvailableStacks();
                 previousAvailableStacks.removeAll(availableStacks);
                 previousAvailableStacks.removeZeros();
-                previousAvailableStacks.keySet().forEach(updateHelper::addChange);
+                previousAvailableStacks.forEach((key, amount) -> updateHelper.addChange(key));
             }
 
             try {

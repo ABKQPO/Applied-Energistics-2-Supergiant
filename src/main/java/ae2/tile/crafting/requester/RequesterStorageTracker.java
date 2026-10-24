@@ -48,12 +48,11 @@ public final class RequesterStorageTracker implements IStorageWatcherNode {
 
     private static NBTTagList writeCounter(KeyCounter counter) {
         var list = new NBTTagList();
-        for (var entry : counter) {
-            long amount = entry.getLongValue();
-            if (amount > 0) {
-                list.appendTag(GenericStack.writeTag(new GenericStack(entry.getKey(), amount)));
+        counter.forEach((entryKey, entryAmount) -> {
+            if (entryAmount > 0) {
+                list.appendTag(GenericStack.writeTag(new GenericStack(entryKey, entryAmount)));
             }
-        }
+        });
         return list;
     }
 
@@ -104,11 +103,11 @@ public final class RequesterStorageTracker implements IStorageWatcherNode {
     public List<GenericStack> getBufferedStacks(int slot) {
         var result = new ArrayList<GenericStack>();
         if (isValidSlot(slot)) {
-            for (var entry : buffered[slot]) {
-                if (entry.getLongValue() > 0) {
-                    result.add(new GenericStack(entry.getKey(), entry.getLongValue()));
+            buffered[slot].forEach((entryKey, entryAmount) -> {
+                if (entryAmount > 0) {
+                    result.add(new GenericStack(entryKey, entryAmount));
                 }
-            }
+            });
         }
         return Collections.unmodifiableList(result);
     }

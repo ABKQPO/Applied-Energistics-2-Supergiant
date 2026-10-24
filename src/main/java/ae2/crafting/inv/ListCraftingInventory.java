@@ -68,12 +68,12 @@ public class ListCraftingInventory implements ICraftingInventory {
     }
 
     public void clear() {
-        for (var stack : list) {
+        list.forEach(stack -> {
             // First clear and then notify, so that if the listener queries the new amount in the change notification,
             // it will be 0 as it should be.
-            list.set(stack.getKey(), 0);
+            stack.setValue(0);
             listener.onChange(stack.getKey());
-        }
+        });
         list.removeZeros();
     }
 
@@ -91,9 +91,7 @@ public class ListCraftingInventory implements ICraftingInventory {
     public NBTTagList writeToNBT() {
         ObjectArrayList<GenericStack> stacks = new ObjectArrayList<>();
 
-        for (var entry : list) {
-            stacks.add(new GenericStack(entry.getKey(), entry.getLongValue()));
-        }
+        list.forEach((entryKey, entryAmount) -> stacks.add(new GenericStack(entryKey, entryAmount)));
 
         return GenericStack.writeList(stacks);
     }

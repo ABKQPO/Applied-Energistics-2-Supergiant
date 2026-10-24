@@ -34,6 +34,7 @@ public class CraftingGraph {
     private Object2ObjectMap<AEKey, CraftingGraphNode> nodeByWhat;
     private boolean requiresLegacyFallback;
     private boolean hasRecursion;
+    private boolean hasAlternatives;
     private long cacheRevision = Long.MIN_VALUE;
     private final ObjectOpenHashSet<AEKey> fuzzyKeys = new ObjectOpenHashSet<>();
     private ObjectSet<AEKey> snapshotKeys;
@@ -153,8 +154,21 @@ public class CraftingGraph {
      */
     public void markRecursion() {
         this.hasRecursion = true;
-    }    public boolean hasRecursion() {
+    }
+
+    public boolean hasRecursion() {
         return this.hasRecursion;
+    }
+
+    /**
+     * Marks that a key has more patterns than the one the graph was built with.
+     */
+    public void markAlternatives() {
+        this.hasAlternatives = true;
+    }
+
+    public boolean hasAlternatives() {
+        return this.hasAlternatives;
     }
 
     /**

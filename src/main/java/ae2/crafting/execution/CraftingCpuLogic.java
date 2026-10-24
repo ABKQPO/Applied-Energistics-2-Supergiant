@@ -187,9 +187,7 @@ public class CraftingCpuLogic {
     }
 
     private static void collectInventoryKeys(Set<AEKey> keys, KeyCounter inventory) {
-        for (var entry : inventory) {
-            keys.add(entry.getKey());
-        }
+        inventory.forEach((entryKey, entryAmount) -> keys.add(entryKey));
     }
 
     private static void collectJobKeys(Set<AEKey> keys, @Nullable ExecutingCraftingJob job) {
@@ -457,14 +455,12 @@ public class CraftingCpuLogic {
 
     private void recordPushedNormalPattern(ExecutingCraftingJob job, KeyCounter expectedOutputs,
                                            KeyCounter expectedContainerItems) {
-        for (var expectedOutput : expectedOutputs) {
-            job.waitingFor.insert(expectedOutput.getKey(), expectedOutput.getLongValue(), Actionable.MODULATE);
-        }
-        for (var expectedContainerItem : expectedContainerItems) {
-            job.waitingFor.insert(expectedContainerItem.getKey(), expectedContainerItem.getLongValue(),
+        expectedOutputs.forEach((entryKey, entryAmount) -> job.waitingFor.insert(entryKey, entryAmount, Actionable.MODULATE));
+        expectedContainerItems.forEach((entryKey, entryAmount) -> {
+            job.waitingFor.insert(entryKey, entryAmount,
                 Actionable.MODULATE);
-            job.timeTracker.addMaxItems(expectedContainerItem.getLongValue(), expectedContainerItem.getKey().getType());
-        }
+            job.timeTracker.addMaxItems(entryAmount, entryKey.getType());
+        });
     }
 
     private void recordPushedPseudoPattern(ExecutingCraftingJob job, IPatternDetails details,
@@ -474,23 +470,21 @@ public class CraftingCpuLogic {
         if (temporaryPattern && taskInventory instanceof RealInputTrackingInventory taskInventoryView) {
             returnTemporaryPatternInputs(taskInventoryView);
         }
-        for (var expectedOutput : expectedOutputs) {
-            long waitingAmount = Math.min(expectedOutput.getLongValue(),
-                getRemainingNormalInputDemand(job, expectedOutput.getKey()));
+        expectedOutputs.forEach((entryKey, entryAmount) -> {
+            long waitingAmount = Math.min(entryAmount,
+                getRemainingNormalInputDemand(job, entryKey));
             if (waitingAmount > 0) {
-                job.waitingFor.insert(expectedOutput.getKey(), waitingAmount, Actionable.MODULATE);
-                job.timeTracker.addMaxItems(waitingAmount, expectedOutput.getKey().getType());
+                job.waitingFor.insert(entryKey, waitingAmount, Actionable.MODULATE);
+                job.timeTracker.addMaxItems(waitingAmount, entryKey.getType());
             }
-            long pseudoAmount = expectedOutput.getLongValue() - waitingAmount;
+            long pseudoAmount = entryAmount - waitingAmount;
             if (pseudoAmount > 0) {
-                job.pseudoInventory.insert(expectedOutput.getKey(), pseudoAmount, Actionable.MODULATE);
+                job.pseudoInventory.insert(entryKey, pseudoAmount, Actionable.MODULATE);
             }
-        }
+        });
         if (!temporaryPattern) {
-            for (var expectedContainerItem : expectedContainerItems) {
-                inventory.insert(expectedContainerItem.getKey(), expectedContainerItem.getLongValue(),
-                    Actionable.MODULATE);
-            }
+            expectedContainerItems.forEach((entryKey, entryAmount) -> inventory.insert(entryKey, entryAmount,
+                Actionable.MODULATE));
         }
     }
 
@@ -929,12 +923,8 @@ public class CraftingCpuLogic {
             }
 
             // Menus already observe no job. Notify its keys without clearing detached, non-resource counters.
-            for (var entry : finished.waitingFor.list) {
-                postChange(entry.getKey());
-            }
-            for (var entry : finished.pseudoInventory.list) {
-                postChange(entry.getKey());
-            }
+            finished.waitingFor.list.forEach((entryKey, entryAmount) -> postChange(entryKey));
+            finished.pseudoInventory.list.forEach((entryKey, entryAmount) -> postChange(entryKey));
             for (var details : finished.tasks.keySet()) {
                 try {
                     for (var output : details.getOutputs()) {
@@ -1041,9 +1031,7 @@ public class CraftingCpuLogic {
             var storage = grid.getStorageService().getInventory();
             var source = cluster.getSrc();
             var keys = new ObjectArrayList<AEKey>();
-            for (var entry : this.inventory.list) {
-                keys.add(entry.getKey());
-            }
+            this.inventory.list.forEach((entryKey, entryAmount) -> keys.add(entryKey));
             InventoryReturn transfer = null;
             for (var what : keys) {
                 if (this.job != null || this.cluster.isDestroyed() || cluster.getGrid() != grid) {
@@ -1439,12 +1427,8 @@ public class CraftingCpuLogic {
 
     public void getAllWaitingFor(Set<AEKey> waitingFor) {
         if (this.job != null) {
-            for (var entry : this.job.waitingFor.list) {
-                waitingFor.add(entry.getKey());
-            }
-            for (var entry : this.job.pseudoInventory.list) {
-                waitingFor.add(entry.getKey());
-            }
+            this.job.waitingFor.list.forEach((entryKey, entryAmount) -> waitingFor.add(entryKey));
+            this.job.pseudoInventory.list.forEach((entryKey, entryAmount) -> waitingFor.add(entryKey));
         }
     }
 
@@ -1622,12 +1606,12 @@ public class CraftingCpuLogic {
         }
 
         var storage = grid.getStorageService().getInventory();
-        for (var entry : taskInventory.realExtracted()) {
-            var inserted = storage.insert(entry.getKey(), entry.getLongValue(), Actionable.MODULATE, cluster.getSrc());
-            if (inserted < entry.getLongValue()) {
-                inventory.insert(entry.getKey(), entry.getLongValue() - inserted, Actionable.MODULATE);
+        taskInventory.realExtracted().forEach((entryKey, entryAmount) -> {
+            var inserted = storage.insert(entryKey, entryAmount, Actionable.MODULATE, cluster.getSrc());
+            if (inserted < entryAmount) {
+                inventory.insert(entryKey, entryAmount - inserted, Actionable.MODULATE);
             }
-        }
+        });
     }
 
     private interface RealInputTrackingInventory extends ICraftingInventory {
@@ -1678,9 +1662,7 @@ public class CraftingCpuLogic {
 
         @Override
         public void reinjectRealInputs(ListCraftingInventory inventory) {
-            for (var entry : realExtracted) {
-                inventory.insert(entry.getKey(), entry.getLongValue(), Actionable.MODULATE);
-            }
+            realExtracted.forEach((entryKey, entryAmount) -> inventory.insert(entryKey, entryAmount, Actionable.MODULATE));
         }
     }
 

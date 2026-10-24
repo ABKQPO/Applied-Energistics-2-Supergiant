@@ -38,6 +38,7 @@ import java.util.Iterator;
 import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.ObjLongConsumer;
 
 /**
  * Helper functions used by the CPU.
@@ -56,27 +57,16 @@ public class CraftingCpuHelper {
         var storage = grid.getStorageService().getInventory();
         var remainingMissing = new KeyCounter();
 
-        for (var entry : usedItems) {
-            var what = entry.getKey();
-            var toExtract = entry.getLongValue();
+        ObjLongConsumer<AEKey> extract = (what, toExtract) -> {
             var extracted = storage.extract(what, toExtract, Actionable.MODULATE, src);
             cpuInventory.insert(what, extracted, Actionable.MODULATE);
 
             if (extracted < toExtract) {
                 remainingMissing.add(what, toExtract - extracted);
             }
-        }
-
-        for (var entry : missingItems) {
-            var what = entry.getKey();
-            var toExtract = entry.getLongValue();
-            var extracted = storage.extract(what, toExtract, Actionable.MODULATE, src);
-            cpuInventory.insert(what, extracted, Actionable.MODULATE);
-
-            if (extracted < toExtract) {
-                remainingMissing.add(what, toExtract - extracted);
-            }
-        }
+        };
+        usedItems.forEach(extract);
+        missingItems.forEach(extract);
 
         return remainingMissing;
     }
@@ -234,9 +224,7 @@ public class CraftingCpuHelper {
         for (var list : inputHolder) {
             // List may be null if we failed to extract some of the pattern's inputs.
             if (list != null) {
-                for (var entry : list) {
-                    sourceInv.insert(entry.getKey(), entry.getLongValue(), Actionable.MODULATE);
-                }
+                list.forEach((entryKey, entryAmount) -> sourceInv.insert(entryKey, entryAmount, Actionable.MODULATE));
             }
         }
     }
@@ -249,7 +237,8 @@ public class CraftingCpuHelper {
                                                                 IPatternDetails.IInput input, World level) {
         return () -> new Iterator<>() {
             private final GenericStack[] possibleInputs = input.possibleInputs();
-            private final Set<FuzzyInputKey> checkedInputs = new ObjectOpenHashSet<>();
+            private final Set<FuzzyInputKey> checkedInputs = possibleInputs.length > 1
+                ? new ObjectOpenHashSet<>(possibleInputs.length) : null;
             private int possibleInputIndex;
             private Iterator<AEKey> fuzzyIterator;
             private long fuzzyAmount;
@@ -295,7 +284,7 @@ public class CraftingCpuHelper {
             private boolean advancePossibleInput() {
                 while (possibleInputIndex < possibleInputs.length) {
                     var stack = possibleInputs[possibleInputIndex++];
-                    if (!checkedInputs.add(new FuzzyInputKey(stack.what(), stack.amount()))) {
+                    if (checkedInputs != null && !checkedInputs.add(new FuzzyInputKey(stack.what(), stack.amount()))) {
                         continue;
                     }
 

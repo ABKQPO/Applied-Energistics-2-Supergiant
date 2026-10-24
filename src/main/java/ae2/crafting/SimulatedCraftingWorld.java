@@ -38,10 +38,9 @@ import java.util.Random;
  * <p>Its only job is to report {@code isRemote == true} so that mods which gate their side effects on it (such
  * as Thaumcraft's crafting handler) take their client branch and stay out of the way. Everything that could
  * read or mutate real level state is stubbed out: reads answer with empty values and writes are discarded, so
- * a mod that ignores {@code isRemote} still cannot touch the live level.</p>
+ * callbacks can still reach the real server and must execute on the game thread.</p>
  *
- * <p>The instance is immutable after construction and safe to share; see {@link CraftingEventSimulation} for
- * the caching policy.</p>
+ * <p>Access is serialized on the game thread; see {@link CraftingEventSimulation} for the caching policy.</p>
  */
 @SuppressWarnings("NullableProblems")
 final class SimulatedCraftingWorld extends World {

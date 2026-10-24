@@ -66,20 +66,16 @@ public record CraftingPlanSummary(long usedBytes, boolean simulation, List<Craft
         var hiddenOutputs = getHiddenTemporaryOutputs(job);
         var batchTargets = getBatchTargets(job);
 
-        for (var used : job.usedItems()) {
-            mapping(plan, used.getKey()).stored += used.getLongValue();
-        }
-        for (var missing : job.missingItems()) {
-            mapping(plan, missing.getKey()).missing += missing.getLongValue();
-        }
-        for (var emitted : job.emittedItems()) {
-            if (hiddenOutputs.contains(emitted.getKey())) {
-                continue;
+        job.usedItems().forEach((entryKey, entryAmount) -> mapping(plan, entryKey).stored += entryAmount);
+        job.missingItems().forEach((entryKey, entryAmount) -> mapping(plan, entryKey).missing += entryAmount);
+        job.emittedItems().forEach((entryKey, entryAmount) -> {
+            if (hiddenOutputs.contains(entryKey)) {
+                return;
             }
-            var entry = mapping(plan, emitted.getKey());
-            entry.stored += emitted.getLongValue();
-            entry.crafting += emitted.getLongValue();
-        }
+            var entry = mapping(plan, entryKey);
+            entry.stored += entryAmount;
+            entry.crafting += entryAmount;
+        });
         for (Object2LongMap.Entry<IPatternDetails> entry : job.patternTimes().object2LongEntrySet()) {
             var outputs = entry.getKey().getOutputs();
             if (outputs instanceof RandomAccess) {

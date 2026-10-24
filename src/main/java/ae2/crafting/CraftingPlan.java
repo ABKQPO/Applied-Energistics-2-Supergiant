@@ -25,6 +25,7 @@ import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 import ae2.crafting.graph.CraftingGraphDisplaySnapshot;
 import ae2.integration.data.LiteCraftTreeNode;
+import com.google.common.math.LongMath;
 import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import org.jetbrains.annotations.Nullable;
 
@@ -44,7 +45,8 @@ public final class CraftingPlan implements ICraftingPlan, TemporaryProviderCarri
     private final @Nullable CraftingTreeNode tree;
     private final List<ICraftingProvider> temporaryProviders;
     private final @Nullable CraftingGraphDisplaySnapshot.Builder graphDisplayBuilder;
-    private final CraftingPlanDisplay display;
+    private final @Nullable CraftingCalculation calculation;
+    private volatile @Nullable CraftingPlanDisplay display;
     private final CraftingAttemptMetrics attemptMetrics;
 
     public CraftingPlan(GenericStack finalOutput, long bytes, boolean simulation, boolean multiplePaths,
@@ -67,8 +69,33 @@ public final class CraftingPlan implements ICraftingPlan, TemporaryProviderCarri
         this.temporaryProviders = temporaryProviders;
         this.graphDisplayBuilder = graphDisplayBuilder;
         this.attemptMetrics = attemptMetrics;
-        this.display = new CraftingPlanDisplay(finalOutput, patternTimes, usedItems, missingItems,
-            tree, graphDisplayBuilder, attemptMetrics, calculation);
+        this.calculation = calculation;
+    }
+
+    /**
+     * The same plan with other contents, for a plan repaired after the calculation. Its crafting tree is still the one
+     * calculated: the tree screen shows the crafts the way they were found, its amounts held to the repaired ones
+     * where the tree is allocated by them.
+     */
+    CraftingPlan withContents(KeyCounter usedItems, KeyCounter emittedItems, KeyCounter missingItems,
+                              Object2LongMap<IPatternDetails> patternTimes, CraftingCalculation calculation) {
+        // Additional crafts also need storage; retain the original bound when a repair only reduces crafts.
+        double additionalBytes = 0;
+        for (var entry : patternTimes.object2LongEntrySet()) {
+            long added = entry.getLongValue() - this.patternTimes.getLong(entry.getKey());
+            if (added <= 0) continue;
+            additionalBytes += added;
+            for (var input : entry.getKey().getInputs()) {
+                if (input.possibleInputs().length == 0) continue;
+                var first = input.possibleInputs()[0];
+                additionalBytes += (double) added * first.amount() * input.getMultiplier()
+                    / first.what().getType().getAmountPerByte() * 8;
+            }
+        }
+        long repairedBytes = LongMath.saturatedAdd(bytes, (long) Math.ceil(additionalBytes));
+        return new CraftingPlan(finalOutput, repairedBytes, simulation, multiplePaths, usedItems, emittedItems, missingItems,
+            intermediateFinalOutputAmount, patternTimes, tree, temporaryProviders, graphDisplayBuilder, attemptMetrics,
+            calculation);
     }
 
     public GenericStack finalOutput() {
@@ -126,6 +153,16 @@ public final class CraftingPlan implements ICraftingPlan, TemporaryProviderCarri
 
     @Override
     public CompletableFuture<LiteCraftTreeNode> requestDisplayTree() {
+        var display = this.display;
+        if (display == null) {
+            synchronized (this) {
+                display = this.display;
+                if (display == null) {
+                    this.display = display = new CraftingPlanDisplay(finalOutput, patternTimes, usedItems, missingItems,
+                        tree, graphDisplayBuilder, attemptMetrics, calculation);
+                }
+            }
+        }
         return display.requestTree();
     }
 }

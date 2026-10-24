@@ -47,7 +47,8 @@ import it.unimi.dsi.fastutil.objects.ReferenceSet;
 import net.minecraft.nbt.NBTTagCompound;
 
 import java.io.IOException;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 
 public class StorageService implements IStorageService, IGridServiceProvider {
 
@@ -123,33 +124,31 @@ public class StorageService implements IStorageService, IGridServiceProvider {
 
         if (!this.cacheInitialized) {
             this.cacheInitialized = true;
-            for (var entry : replacement) {
-                var amount = sanitizeAmount(entry.getLongValue());
+            replacement.forEach((entryKey, entryAmount) -> {
+                var amount = sanitizeAmount(entryAmount);
                 if (amount > 0) {
-                    postWatcherUpdate(entry.getKey(), amount, 0);
+                    postWatcherUpdate(entryKey, amount, 0);
                 }
-            }
+            });
             return;
         }
 
-        for (var entry : replacement) {
-            var what = entry.getKey();
-            var newAmount = sanitizeAmount(entry.getLongValue());
-            var oldAmount = sanitizeAmount(previous.get(what));
+        replacement.forEach((entryKey, entryAmount) -> {
+            var newAmount = sanitizeAmount(entryAmount);
+            var oldAmount = sanitizeAmount(previous.get(entryKey));
             if (newAmount != oldAmount) {
-                postWatcherUpdate(what, newAmount, oldAmount);
-                this.storage.postChange(what, newAmount - oldAmount);
+                postWatcherUpdate(entryKey, newAmount, oldAmount);
+                this.storage.postChange(entryKey, newAmount - oldAmount);
             }
-        }
+        });
 
-        for (var entry : previous) {
-            var what = entry.getKey();
-            var oldAmount = sanitizeAmount(entry.getLongValue());
-            if (oldAmount > 0 && replacement.get(what) == 0) {
-                postWatcherUpdate(what, 0, oldAmount);
-                this.storage.postChange(what, -oldAmount);
+        previous.forEach((entryKey, entryAmount) -> {
+            var oldAmount = sanitizeAmount(entryAmount);
+            if (oldAmount > 0 && replacement.get(entryKey) == 0) {
+                postWatcherUpdate(entryKey, 0, oldAmount);
+                this.storage.postChange(entryKey, -oldAmount);
             }
-        }
+        });
     }
 
     private void applyMonitorDelta(AEKey what, long delta, Object source) {
@@ -465,10 +464,21 @@ public class StorageService implements IStorageService, IGridServiceProvider {
     }
 
     private final class SourceListener implements MEStorageChangeListener {
+        private static final VarHandle INVALIDATION_QUEUED;
+
+        static {
+            try {
+                INVALIDATION_QUEUED = MethodHandles.lookup().findVarHandle(SourceListener.class,
+                    "invalidationQueued", boolean.class);
+            } catch (ReflectiveOperationException e) {
+                throw new ExceptionInInitializerError(e);
+            }
+        }
+
         private final ProviderState provider;
         private final MEStorageMonitor monitor;
         private final Thread ownerThread;
-        private final AtomicBoolean invalidationQueued = new AtomicBoolean();
+        private volatile boolean invalidationQueued;
 
         private SourceListener(ProviderState provider, MEStorageMonitor monitor, Thread ownerThread) {
             this.provider = provider;
@@ -493,7 +503,7 @@ public class StorageService implements IStorageService, IGridServiceProvider {
                 AELog.error("Detached storage monitor %s invoked a content callback.", this.monitor);
                 return;
             }
-            if (this.invalidationQueued.get()) {
+            if (this.invalidationQueued) {
                 return;
             }
             if (processingMonitorCallback || storage.isDispatchingListeners()) {
@@ -533,16 +543,16 @@ public class StorageService implements IStorageService, IGridServiceProvider {
         }
 
         private void queueThreadInvalidation() {
-            if (this.invalidationQueued.compareAndSet(false, true)) {
+            if (INVALIDATION_QUEUED.compareAndSet(this, false, true)) {
                 AELog.error("Storage monitor %s invoked a callback from the wrong thread; queuing a server-thread invalidation.",
                     this.monitor);
                 if (!TickHandler.instance().tryAddCallable(null, () -> {
-                    this.invalidationQueued.set(false);
+                    this.invalidationQueued = false;
                     if (isValid(this.monitor)) {
                         invalidateCache();
                     }
                 })) {
-                    this.invalidationQueued.set(false);
+                    this.invalidationQueued = false;
                 }
             }
         }

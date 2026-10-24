@@ -16,10 +16,11 @@ import net.minecraft.inventory.Slot;
 import net.minecraft.item.ItemStack;
 import org.jetbrains.annotations.Nullable;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 public abstract class AbstractContainerRequester extends AEBaseContainer {
@@ -28,8 +29,21 @@ public abstract class AbstractContainerRequester extends AEBaseContainer {
     public static final int REQUEST_SLOT_FIRST_Y = 21;
     public static final int REQUEST_SLOT_SPACING = 19;
     private final List<RequestSlot> requestSlots = new ArrayList<>(REQUEST_SLOT_COUNT);
-    private static final AtomicLong NEXT_SYNC_GENERATION = new AtomicLong(1);
-    private long syncGeneration = NEXT_SYNC_GENERATION.getAndIncrement();
+    private static final VarHandle NEXT_SYNC_GENERATION;
+    // Updated through NEXT_SYNC_GENERATION; the backing field must remain writable.
+    @SuppressWarnings("FieldMayBeFinal")
+    private static volatile long nextSyncGeneration = 1;
+
+    static {
+        try {
+            NEXT_SYNC_GENERATION = MethodHandles.lookup().findStaticVarHandle(AbstractContainerRequester.class,
+                "nextSyncGeneration", long.class);
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private long syncGeneration = (long) NEXT_SYNC_GENERATION.getAndAdd(1L);
     private Consumer<RequesterSyncPacket> requesterPacketSender = createRequesterPacketSender();
     private long idSerial = Long.MIN_VALUE;
 
@@ -42,7 +56,7 @@ public abstract class AbstractContainerRequester extends AEBaseContainer {
     }
 
     protected final void advanceSyncSource() {
-        this.syncGeneration = NEXT_SYNC_GENERATION.getAndIncrement();
+        this.syncGeneration = (long) NEXT_SYNC_GENERATION.getAndAdd(1L);
         this.requesterPacketSender = createRequesterPacketSender();
     }
 

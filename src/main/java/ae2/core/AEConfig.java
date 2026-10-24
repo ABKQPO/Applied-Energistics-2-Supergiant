@@ -38,10 +38,13 @@ import ae2.util.EmptyArrays;
 import net.minecraftforge.common.config.Config;
 import net.minecraftforge.common.config.ConfigManager;
 import net.minecraftforge.fml.client.event.ConfigChangedEvent;
+import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+import net.minecraftforge.fml.relauncher.Side;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 @SuppressWarnings("CanBeFinal")
 @Config(modid = Tags.MOD_ID, name = Tags.MOD_ID, category = "")
@@ -259,6 +262,21 @@ public class AEConfig {
 
     public int getMemoizationCacheSize() {
         return CRAFTING.memoizationCacheSize;
+    }
+
+    public long getCraftingFallbackNanos() {
+        return TimeUnit.SECONDS.toNanos(Math.max(0, CRAFTING.craftingCalculationFallbackSeconds));
+    }
+
+    /**
+     * Like {@code MaxCraftingSteps} of other AE2 versions, only a dedicated server limits a calculation: in singleplayer
+     * it only holds up its own player.
+     */
+    public long getCraftingCalculationLimitNanos() {
+        if (FMLCommonHandler.instance().getSide() != Side.SERVER) {
+            return 0;
+        }
+        return TimeUnit.SECONDS.toNanos(Math.max(0, CRAFTING.craftingCalculationLimitSeconds));
     }
 
     public boolean isTooltipShowCellUpgrades() {
@@ -797,6 +815,18 @@ public class AEConfig {
             "Higher values improve cache hit rates but use more memory. Set to 0 to disable the cache."})
         @Config.RangeInt(min = 0, max = 100000)
         public int memoizationCacheSize = 10000;
+
+        @Config.Name("craftingCalculationFallbackSeconds")
+        @Config.Comment({"Seconds of calculation time a plan with missing items may spend on trying alternative ",
+            "patterns one by one, after which the best plan found so far is kept. 0 never tries them."})
+        @Config.RangeInt(min = 0)
+        public int craftingCalculationFallbackSeconds = 5;
+
+        @Config.Name("craftingCalculationLimitSeconds")
+        @Config.Comment({"Seconds of calculation time one crafting calculation may take on a dedicated server before ",
+            "it fails. 0 disables the limit."})
+        @Config.RangeInt(min = 0)
+        public int craftingCalculationLimitSeconds = 30;
     }
 
     public static class CraftingCPU {

@@ -59,11 +59,11 @@ public class PreciseStorageBusPart extends StorageBusPart {
     @Override
     protected IPartitionList createFilter() {
         KeyCounter filter = new KeyCounter();
-        for (var entry : this.stackConfig.getAvailableStacks()) {
-            if (entry.getKey() != null && entry.getLongValue() > 0) {
-                filter.add(entry.getKey(), entry.getLongValue());
+        this.stackConfig.getAvailableStacks().forEach((entryKey, entryAmount) -> {
+            if (entryKey != null && entryAmount > 0) {
+                filter.add(entryKey, entryAmount);
             }
-        }
+        });
         return new PreciseAmountFilter(filter);
     }
 

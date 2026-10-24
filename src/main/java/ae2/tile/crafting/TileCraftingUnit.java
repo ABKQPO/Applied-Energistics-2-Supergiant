@@ -319,15 +319,15 @@ public class TileCraftingUnit extends AENetworkedTile
         if (!recovery.isEmpty()) {
             Platform.spawnDrops(this.world, this.pos, Collections.singletonList(recovery));
         }
-        for (var entry : inv.list) {
-            if (this.cluster.craftingLogic.isInventoryUnconfirmed(entry.getKey())) {
-                continue;
+        inv.list.forEach((entryKey, entryAmount) -> {
+            if (this.cluster.craftingLogic.isInventoryUnconfirmed(entryKey)) {
+                return;
             }
             var position = places.get(this.world.rand.nextInt(places.size()));
             var stacks = new ObjectArrayList<ItemStack>();
-            entry.getKey().addDrops(entry.getLongValue(), stacks, this.world, position);
+            entryKey.addDrops(entryAmount, stacks, this.world, position);
             Platform.spawnDrops(this.world, position, stacks);
-        }
+        });
 
         inv.clear();
         this.cluster.destroy();

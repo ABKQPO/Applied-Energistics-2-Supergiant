@@ -423,7 +423,9 @@ compileTestJava {
 }
 
 test {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        excludeTags 'crafting-benchmark'
+    }
     javaLauncher.set(javaToolchains.launcherFor {
         languageVersion = JavaLanguageVersion.of(25)
     })
@@ -438,6 +440,26 @@ test {
         testLogging {
             showStandardStreams = true
         }
+    }
+}
+
+// Run explicitly: repeated 100k-node calculations should not add timing noise to the normal CI suite.
+tasks.register('craftingLargeTreeBenchmark', Test) {
+    group = 'verification'
+    description = 'Measures cold and warm crafting calculations for the large synthetic tree and the in-game END tree.'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = tasks.named('test', Test).get().classpath
+    javaLauncher.set(tasks.named('test', Test).flatMap { it.javaLauncher })
+    maxHeapSize = '1g'
+    // The END tree uses AEItemKey NBT variants; keep its JIT profiles out of the synthetic TestKey benchmark.
+    forkEvery = 1
+    useJUnitPlatform {
+        includeTags 'crafting-benchmark'
+    }
+    outputs.upToDateWhen { false }
+    testLogging {
+        showStandardStreams = true
+        exceptionFormat = 'full'
     }
 }
 

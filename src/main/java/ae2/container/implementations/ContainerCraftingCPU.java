@@ -46,7 +46,6 @@ import ae2.tile.crafting.ICraftingCPUTileEntity;
 import ae2.util.NullConfigManager;
 import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
-import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.entity.player.InventoryPlayer;
@@ -157,9 +156,7 @@ public class ContainerCraftingCPU extends AEBaseContainer implements IConfigurab
 
             KeyCounter allItems = new KeyCounter();
             cluster.craftingLogic.getAllItems(allItems);
-            for (Object2LongMap.Entry<AEKey> entry : allItems) {
-                incrementalUpdateHelper.addChange(entry.getKey());
-            }
+            allItems.forEach((entryKey, entryAmount) -> incrementalUpdateHelper.addChange(entryKey));
 
             cluster.craftingLogic.addListener(cpuChangeListener);
         } else {
@@ -195,9 +192,7 @@ public class ContainerCraftingCPU extends AEBaseContainer implements IConfigurab
 
         KeyCounter allItems = new KeyCounter();
         this.cpu.craftingLogic.getAllItems(allItems);
-        for (Object2LongMap.Entry<AEKey> entry : allItems) {
-            this.incrementalUpdateHelper.addChange(entry.getKey());
-        }
+        allItems.forEach((entryKey, entryAmount) -> this.incrementalUpdateHelper.addChange(entryKey));
     }
 
     private boolean sendStatus(CraftingStatus status) {

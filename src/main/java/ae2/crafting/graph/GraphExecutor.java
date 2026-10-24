@@ -2,7 +2,6 @@ package ae2.crafting.graph;
 
 import ae2.api.config.Actionable;
 import ae2.api.stacks.AEKey;
-import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 import ae2.crafting.CraftBranchFailure;
 import ae2.crafting.CraftingCalculation;
@@ -129,6 +128,27 @@ public class GraphExecutor {
         }
     }
 
+    private static void ensureBoundaryCovers(KeyCounter planned, KeyCounter actual, String message) {
+        actual.forEach((entryKey, entryAmount) -> {
+            if (entryAmount > planned.get(entryKey)) {
+                throw new IllegalStateException(message + ": " + entryKey);
+            }
+        });
+    }
+
+    private record BoundaryResult(AEKey key, long needed, long extracted,
+                                  CraftingGraphEdge edge) {
+    }
+
+    private static void ensurePlannedBoundaryCovers(CraftingGraphNode node,
+                                                    KeyCounter actual) {
+        var planned = node.getPlannedBoundaryDemands();
+        if (planned == null) {
+            throw new IllegalStateException("Local crafting unit has no boundary plan for " + node.getWhat());
+        }
+        ensureBoundaryCovers(planned, actual, "Local crafting boundary grew for " + node.getWhat());
+    }
+
     private void applyLocalUnit(CraftingGraphNode node, CraftingSimulationState inv,
                                 CraftingGraphDisplaySnapshot.Builder snapshot) throws InterruptedException {
         try {
@@ -146,12 +166,12 @@ public class GraphExecutor {
             var marker = calc.createCalculationMarker();
             var boundaryResults = new ObjectArrayList<BoundaryResult>();
             try {
-                for (var boundary : boundaryDemands) {
-                    var edge = findBoundaryEdge(node, boundary.getKey());
-                    long extracted = transaction.extract(boundary.getKey(), boundary.getLongValue(), Actionable.MODULATE);
-                    transaction.addStackBytes(boundary.getKey(), extracted, 1);
-                    boundaryResults.add(new BoundaryResult(boundary.getKey(), boundary.getLongValue(), extracted, edge));
-                }
+                boundaryDemands.forEach((entryKey, entryAmount) -> {
+                    var edge = findBoundaryEdge(node, entryKey);
+                    long extracted = transaction.extract(entryKey, entryAmount, Actionable.MODULATE);
+                    transaction.addStackBytes(entryKey, extracted, 1);
+                    boundaryResults.add(new BoundaryResult(entryKey, entryAmount, extracted, edge));
+                });
                 calc.commitLocalPattern(plan, transaction);
                 transaction.applyDiff(inv);
             } catch (RuntimeException | Error failure) {
@@ -174,27 +194,6 @@ public class GraphExecutor {
             }
         } catch (CraftBranchFailure e) {
             throw new IllegalStateException("Local crafting unit failed for " + node.getWhat(), e);
-        }
-    }
-
-    private record BoundaryResult(AEKey key, long needed, long extracted,
-                                  CraftingGraphEdge edge) {
-    }
-
-    private static void ensurePlannedBoundaryCovers(CraftingGraphNode node,
-                                                    KeyCounter actual) {
-        var planned = node.getPlannedBoundaryDemands();
-        if (planned == null) {
-            throw new IllegalStateException("Local crafting unit has no boundary plan for " + node.getWhat());
-        }
-        ensureBoundaryCovers(planned, actual, "Local crafting boundary grew for " + node.getWhat());
-    }
-
-    private static void ensureBoundaryCovers(KeyCounter planned, KeyCounter actual, String message) {
-        for (var entry : actual) {
-            if (entry.getLongValue() > planned.get(entry.getKey())) {
-                throw new IllegalStateException(message + ": " + entry.getKey());
-            }
         }
     }
 
@@ -228,7 +227,11 @@ public class GraphExecutor {
             return;
         }
 
-        for (var edge : node.getInputs()) {
+        CraftingGraphEdge cycleCut = null;
+        var inputs = node.getInputs();
+        for (int inputIndex = 0; inputIndex < inputs.size(); inputIndex++) {
+            var edge = inputs.get(inputIndex);
+            if (cycleCut == null && edge.cycleCut()) cycleCut = edge;
             long needed = edge.cycleCut() ? edge.seedDemand()
                 : LongMath.saturatedMultiply(edge.amountPerCraft(), times);
             boolean ownsInputBytes = edge.producer() == null
@@ -261,14 +264,9 @@ public class GraphExecutor {
             }
         }
 
-        CraftingGraphEdge cycleCut = null;
-        for (var edge : node.getInputs()) {
-            if (edge.cycleCut()) {
-                cycleCut = edge;
-                break;
-            }
-        }
-        for (GenericStack output : node.getOutputs()) {
+        var outputs = node.getOutputs();
+        for (int outputIndex = 0; outputIndex < outputs.size(); outputIndex++) {
+            var output = outputs.get(outputIndex);
             long outputAmount = LongMath.saturatedMultiply(output.amount(), times);
             if (cycleCut != null && output.what().equals(node.getWhat())) {
                 int componentId = graph.getTopology().getComponentId(node);

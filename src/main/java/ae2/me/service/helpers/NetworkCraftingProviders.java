@@ -381,9 +381,8 @@ public class NetworkCraftingProviders {
         ensureInitialized();
         ObjectList<AEKey> fuzzyCandidates = new ObjectArrayList<>();
         synchronized (lock) {
-            for (var fuzzy : craftableItemsList.findFuzzy(whatToCraft, FuzzyMode.IGNORE_ALL)) {
-                fuzzyCandidates.add(fuzzy.getKey());
-            }
+            craftableItemsList.forEachFuzzy(whatToCraft, FuzzyMode.IGNORE_ALL,
+                (key, amount) -> fuzzyCandidates.add(key));
         }
         for (int i = 0, size = fuzzyCandidates.size(); i < size; i++) {
             var fuzzy = fuzzyCandidates.get(i);

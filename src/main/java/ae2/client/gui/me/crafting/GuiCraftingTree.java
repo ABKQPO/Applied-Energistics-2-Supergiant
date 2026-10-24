@@ -70,8 +70,17 @@ public class GuiCraftingTree extends AEBaseGui<ContainerCraftingTree> {
         widgets.add("missingOnly", missingOnly);
         this.back = new CraftingTreeButton(Icon.BACK,
             GuiText.CraftingTreeBack.text(),
-            () -> InitNetwork.sendToServer(new SwitchCraftingTreePacket(this.container.windowId)));
+            this::goBack);
         widgets.add("back", back);
+    }
+
+    // Out of the ring shown, or back to the crafting plan
+    private void goBack() {
+        if (tree.isInRing()) {
+            tree.leaveRing();
+        } else {
+            InitNetwork.sendToServer(new SwitchCraftingTreePacket(this.container.windowId));
+        }
     }
 
     private static ITextComponent savedMessage(Path file) {

@@ -8,6 +8,7 @@ public final class CraftingGraphEdge {
     private final long amountPerCraft;
     private final @Nullable CraftingGraphNode producer;
     private final boolean pseudoLane;
+    private int ordinal = -1;
     private boolean cycleCut;
     private long seedDemand;
     private long seedRequired;
@@ -37,6 +38,14 @@ public final class CraftingGraphEdge {
 
     public boolean pseudoLane() {
         return pseudoLane;
+    }
+
+    int ordinal() {
+        return ordinal;
+    }
+
+    void assignOrdinal(int ordinal) {
+        this.ordinal = ordinal;
     }
 
     public boolean cycleCut() {

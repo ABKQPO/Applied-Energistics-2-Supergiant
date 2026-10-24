@@ -1,7 +1,7 @@
 package ae2.integration.data;
 
 import ae2.api.crafting.IPatternDetails;
-import ae2.api.stacks.AEKey;
+import ae2.api.stacks.AEKey2LongMap;
 import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 import ae2.crafting.CraftingTreeNode;
@@ -21,19 +21,35 @@ import java.util.Objects;
 import java.util.RandomAccess;
 
 public final class LiteCraftTreeNode implements Comparable<LiteCraftTreeNode> {
+    /**
+     * An input a cycle cut off from what makes it, until {@link CraftingTreeCycles} finds that above it.
+     */
+    public static final int FEEDBACK_PENDING = Integer.MAX_VALUE;
+
     private final LiteCraftTreeProc parent;
     private final GenericStack output;
     private final List<LiteCraftTreeProc> inputs;
     private final long missing;
+    private final int feedback;
 
     private boolean missingCached = false;
     private boolean missingCache = false;
 
     public LiteCraftTreeNode(final LiteCraftTreeProc parent, GenericStack output, List<LiteCraftTreeProc> inputs, long missing) {
+        this(parent, output, inputs, missing, -1);
+    }
+
+    /**
+     * @param feedback for an input fed back around a crafting cycle, how many crafts above the one taking it the one
+     *                 making it is, 0 for the same; -1 for any other node
+     */
+    public LiteCraftTreeNode(final LiteCraftTreeProc parent, GenericStack output, List<LiteCraftTreeProc> inputs,
+                             long missing, int feedback) {
         this.parent = parent;
         this.output = output;
         this.inputs = inputs;
         this.missing = missing;
+        this.feedback = feedback;
     }
 
     public static LiteCraftTreeNode of(final CraftingTreeNode node, final LiteCraftTreeProc parent) {
@@ -114,7 +130,8 @@ public final class LiteCraftTreeNode implements Comparable<LiteCraftTreeNode> {
         }
 
         long missing = CraftingTreeByteBuf.readNonNegativeVarLong(buf, "Crafting tree missing amount");
-        return new LiteCraftTreeNode(parent, output, inputs, missing);
+        int feedback = new PacketBuffer(buf).readVarInt() - 1;
+        return new LiteCraftTreeNode(parent, output, inputs, missing, feedback);
     }
 
     public static int diveToDeep(final LiteCraftTreeNode node, final int depth, final DepthRecorder recorder) {
@@ -201,6 +218,7 @@ public final class LiteCraftTreeNode implements Comparable<LiteCraftTreeNode> {
             }
         }
         CraftingTreeByteBuf.writeVarLong(buf, missing);
+        new PacketBuffer(buf).writeVarInt(feedback + 1);
     }
 
     private static boolean isMissing(final LiteCraftTreeProc proc) {
@@ -264,7 +282,7 @@ public final class LiteCraftTreeNode implements Comparable<LiteCraftTreeNode> {
             }
         }
 
-        LiteCraftTreeNode node = new LiteCraftTreeNode(parent, output, missingInputs, missing);
+        LiteCraftTreeNode node = new LiteCraftTreeNode(parent, output, missingInputs, missing, feedback);
         node.missingCached = true;
         node.missingCache = true;
         return node;
@@ -286,9 +304,21 @@ public final class LiteCraftTreeNode implements Comparable<LiteCraftTreeNode> {
         return missing;
     }
 
+    public int feedback() {
+        return feedback;
+    }
+
+    /**
+     * Marks it as missing ingredients below it, for a node standing for others that are.
+     */
+    public void markMissing() {
+        this.missingCached = true;
+        this.missingCache = true;
+    }
+
     public static final class PatternTimesAllocator {
         private final Object2LongOpenHashMap<IPatternDetails> remainingTimes = new Object2LongOpenHashMap<>();
-        private final Object2LongOpenHashMap<AEKey> remainingSelfReturningInputs = new Object2LongOpenHashMap<>();
+        private final AEKey2LongMap remainingSelfReturningInputs = new AEKey2LongMap.OpenHashMap();
 
         private PatternTimesAllocator(Object2LongMap<IPatternDetails> patternTimes) {
             remainingTimes.defaultReturnValue(0);
@@ -301,12 +331,8 @@ public final class LiteCraftTreeNode implements Comparable<LiteCraftTreeNode> {
         public PatternTimesAllocator(Object2LongMap<IPatternDetails> patternTimes, KeyCounter usedItems,
                                      KeyCounter missingItems) {
             this(patternTimes);
-            for (var entry : usedItems) {
-                remainingSelfReturningInputs.addTo(entry.getKey(), entry.getLongValue());
-            }
-            for (var entry : missingItems) {
-                remainingSelfReturningInputs.addTo(entry.getKey(), entry.getLongValue());
-            }
+            usedItems.forEach(remainingSelfReturningInputs::addTo);
+            missingItems.forEach(remainingSelfReturningInputs::addTo);
         }
 
         long allocate(CraftingTreeProcess process) {
@@ -350,12 +376,13 @@ public final class LiteCraftTreeNode implements Comparable<LiteCraftTreeNode> {
         var that = (LiteCraftTreeNode) obj;
         return Objects.equals(this.output, that.output) &&
             Objects.equals(this.inputs, that.inputs) &&
-            this.missing == that.missing;
+            this.missing == that.missing &&
+            this.feedback == that.feedback;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(output, inputs, missing);
+        return Objects.hash(output, inputs, missing, feedback);
     }
 
     @Override

@@ -259,17 +259,12 @@ public class StorageLevelEmitterPart extends AbstractLevelEmitterPart
         if (myStack == null) {
             this.aggregateOverflow = null;
             this.lastReportedValue = 0;
-            for (var st : stacks) {
-                addReportedAmount(st.getLongValue());
-            }
+            stacks.forEach((entryKey, entryAmount) -> addReportedAmount(entryAmount));
         } else if (isUpgradedWith(AEItems.FUZZY_CARD)) {
             this.aggregateOverflow = null;
             this.lastReportedValue = 0;
             var fzMode = this.getConfigManager().getSetting(Settings.FUZZY_MODE);
-            var fuzzyList = stacks.findFuzzy(myStack, fzMode);
-            for (var st : fuzzyList) {
-                addReportedAmount(st.getLongValue());
-            }
+            stacks.forEachFuzzy(myStack, fzMode, (key, amount) -> addReportedAmount(amount));
         } else {
             this.lastReportedValue = stacks.get(myStack);
         }

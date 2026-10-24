@@ -3,9 +3,10 @@ package ae2.parts.automation.special;
 import ae2.api.networking.IGrid;
 import ae2.api.parts.IPartItem;
 import ae2.api.stacks.AEKey;
+import ae2.api.stacks.KeyCounter;
 import ae2.parts.automation.ExportBusPart;
 import ae2.util.prioritylist.IPartitionList;
-import com.google.common.collect.ImmutableList;
+import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import net.minecraft.nbt.NBTTagCompound;
 
 abstract class SpecialExportBusPart extends ExportBusPart {
@@ -37,14 +38,20 @@ abstract class SpecialExportBusPart extends ExportBusPart {
 
     protected abstract IPartitionList createSpecialFilter();
 
+    static ObjectArrayList<AEKey> snapshotKeys(KeyCounter inventory) {
+        // Transfers can change the live counter. Snapshot keys in traversal order; its fast entries are reused.
+        var keys = new ObjectArrayList<AEKey>(inventory.size());
+        inventory.forEach((key, amount) -> keys.add(key));
+        return keys;
+    }
+
     @Override
     protected boolean doBusWork(IGrid grid) {
         var storageService = grid.getStorageService();
         var context = createTransferContext(storageService, grid.getEnergyService());
         var filter = getSpecialFilter();
 
-        for (var entry : ImmutableList.copyOf(storageService.getCachedInventory())) {
-            AEKey what = entry.getKey();
+        for (AEKey what : snapshotKeys(storageService.getCachedInventory())) {
             if (!filter.isListed(what)) {
                 continue;
             }

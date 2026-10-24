@@ -40,9 +40,10 @@ import it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap;
 import net.minecraft.util.text.ITextComponent;
 import net.minecraft.util.text.TextComponentString;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Combines several external storages that each handle a given key-space. External monitors are only subscribed while
@@ -595,7 +596,18 @@ public class CompositeStorage implements MEStorageMonitor, ITickingMonitor {
     }
 
     private static final class SourceGroup implements MEStorageChangeListener {
-        private final AtomicBoolean invalidationQueued = new AtomicBoolean();
+        private static final VarHandle INVALIDATION_QUEUED;
+
+        static {
+            try {
+                INVALIDATION_QUEUED = MethodHandles.lookup().findVarHandle(SourceGroup.class,
+                    "invalidationQueued", boolean.class);
+            } catch (ReflectiveOperationException e) {
+                throw new ExceptionInInitializerError(e);
+            }
+        }
+
+        private volatile boolean invalidationQueued;
         private final ExternalStorageMonitor monitor;
         private final StorageFilter storageFilter;
         private final Thread ownerThread;
@@ -647,7 +659,7 @@ public class CompositeStorage implements MEStorageMonitor, ITickingMonitor {
                 AELog.error("Detached external storage %s invoked a content callback.", this.monitor);
                 return;
             }
-            if (this.invalidationQueued.get()) {
+            if (this.invalidationQueued) {
                 return;
             }
             if (composite.processingSourceCallback || composite.dispatchingListeners) {
@@ -690,18 +702,18 @@ public class CompositeStorage implements MEStorageMonitor, ITickingMonitor {
         }
 
         private void queueThreadInvalidation() {
-            if (this.invalidationQueued.compareAndSet(false, true)) {
+            if (INVALIDATION_QUEUED.compareAndSet(this, false, true)) {
                 AELog.error("External storage %s invoked a callback from the wrong thread; queuing a server-thread invalidation.",
                     this.monitor);
                 if (!TickHandler.instance().tryAddCallable(null, () -> {
-                    this.invalidationQueued.set(false);
+                    this.invalidationQueued = false;
                     var composite = this.owner;
                     if (composite != null && isValid(this)) {
                         composite.eventDirty = true;
                         composite.requestListUpdate();
                     }
                 })) {
-                    this.invalidationQueued.set(false);
+                    this.invalidationQueued = false;
                 }
             }
         }

@@ -11,6 +11,7 @@ import ae2.api.stacks.GenericStack;
 import ae2.api.stacks.KeyCounter;
 import ae2.container.ContainerConstants;
 import ae2.core.localization.GuiText;
+import ae2.crafting.CraftingCalculation;
 import ae2.crafting.CraftingEventSimulation;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import net.minecraft.client.util.ITooltipFlag;
@@ -323,6 +324,9 @@ public class AECraftingPattern implements IAssemblerPattern {
 
     @Override
     public boolean isItemValid(int slot, @Nullable AEItemKey key, World level) {
+        if (CraftingCalculation.isCalculationThread()) {
+            return CraftingCalculation.runOnMainThread(() -> isItemValid(slot, key, level));
+        }
         if (!canSubstitute) {
             return sparseInputs.get(slot) == null && key == null
                 || sparseInputs.get(slot) != null && sparseInputs.get(slot).what().equals(key);
@@ -383,6 +387,9 @@ public class AECraftingPattern implements IAssemblerPattern {
 
     @Override
     public ItemStack assemble(InventoryCrafting input, World level) {
+        if (CraftingCalculation.isCalculationThread()) {
+            return CraftingCalculation.runOnMainThread(() -> assemble(input, level));
+        }
         if (input.getWidth() != CRAFTING_GRID_DIMENSION || input.getHeight() != CRAFTING_GRID_DIMENSION) {
             return ItemStack.EMPTY;
         }
@@ -452,6 +459,9 @@ public class AECraftingPattern implements IAssemblerPattern {
 
     @Override
     public NonNullList<ItemStack> getRemainingItems(InventoryCrafting input) {
+        if (CraftingCalculation.isCalculationThread()) {
+            return CraftingCalculation.runOnMainThread(() -> getRemainingItems(input));
+        }
         if (!canSubstituteFluids) {
             return recipe.getRemainingItems(input);
         }
@@ -483,6 +493,9 @@ public class AECraftingPattern implements IAssemblerPattern {
         // from the cached result instead of rebuilding the inventory and re-running the recipe for each slot.
         var defaultInput = slot >= 0 && slot < sparseInputs.size() ? sparseInputs.get(slot) : null;
         if (defaultInput == null || !key.equals(defaultInput.what())) {
+            if (CraftingCalculation.isCalculationThread()) {
+                return CraftingCalculation.runOnMainThread(() -> getRecipeRemainder(slot, key));
+            }
             // Non-default template: compute from a frame that actually contains the given input.
             var testFrame = makeCraftingInventory();
             testFrame.setInventorySlotContents(slot, key.toStack());
@@ -503,6 +516,9 @@ public class AECraftingPattern implements IAssemblerPattern {
     private List<ItemStack> getDefaultRemainingItems() {
         var cached = this.cachedRemainingItems;
         if (cached == null) {
+            if (CraftingCalculation.isCalculationThread()) {
+                return CraftingCalculation.runOnMainThread(this::getDefaultRemainingItems);
+            }
             cached = this.recipe.getRemainingItems(makeCraftingInventory());
             this.cachedRemainingItems = cached;
         }
