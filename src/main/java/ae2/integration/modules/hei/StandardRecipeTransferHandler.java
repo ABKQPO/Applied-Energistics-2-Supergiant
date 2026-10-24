@@ -18,6 +18,9 @@ import ae2.core.network.InitNetwork;
 import ae2.core.network.serverbound.RecipeTransferPacket;
 import ae2.crafting.pattern.AEProcessingPattern;
 import ae2.mixins.hei.AccessorRecipeLayout;
+import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
+import it.unimi.dsi.fastutil.ints.IntList;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.ints.IntSet;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
@@ -123,7 +126,11 @@ public final class StandardRecipeTransferHandler<C extends Container> implements
             if (ingredient != null && ingredient.isInput()) {
                 // Keep empty input positions. They still consume a target recipe slot and must not shift the next
                 // ingredient into it.
-                result.add(new InputIngredient(entry.getKey(), ingredient));
+                if (entry instanceof Int2ObjectMap.Entry<? extends IGuiIngredient<ItemStack>> e) {
+                    result.add(new InputIngredient(e.getIntKey(), ingredient));
+                } else {
+                    result.add(new InputIngredient(entry.getKey(), ingredient));
+                }
             }
         }
         return result;
@@ -224,13 +231,16 @@ public final class StandardRecipeTransferHandler<C extends Container> implements
     }
 
     private static <C extends Container> CraftingRecipeTransferAnalysis analyzeAvailability(
-        C container, EntityPlayer player, List<RecipeTransferPacket.Input> inputs, List<Integer> guiSlots) {
+        C container, EntityPlayer player, List<RecipeTransferPacket.Input> inputs, IntList guiSlots) {
         AEKey2LongMap available = localAvailability(container, player, inputs);
-        var reserved = new AEKey2LongMap.SaturatingOpenHashMap();
+        var reservedLocal = new AEKey2LongMap.SaturatingOpenHashMap();
+        var reservedNetwork = new AEKey2LongMap.SaturatingOpenHashMap();
         IntSet missing = new IntOpenHashSet();
         IntSet craftable = new IntOpenHashSet();
-        IClientRepo repo = container instanceof ContainerMEStorage storage ? storage.getClientRepo() : null;
-        if (repo == null) {
+        IntSet network = new IntOpenHashSet();
+        boolean isMeGui = container instanceof ContainerMEStorage;
+        IClientRepo repo = isMeGui ? ((ContainerMEStorage) container).getClientRepo() : null;
+        if (!isMeGui) {
             NetworkAmount.refreshWirelessTerminals(player);
         }
         boolean hasAvailableIngredients = false;
@@ -242,18 +252,20 @@ public final class StandardRecipeTransferHandler<C extends Container> implements
             ItemStack existing = target == null ? ItemStack.EMPTY : target.getStack();
             AEItemKey selected = null;
             long bestAvailable = -1;
+            long bestLocalAvailable = 0;
+            long bestNetworkAvailable = 0;
             boolean bestCraftable = false;
             for (int candidateIndex = 0; candidateIndex < input.candidates().size(); candidateIndex++) {
                 AEItemKey candidate = input.candidates().get(candidateIndex);
                 if (!existing.isEmpty() && !candidate.equals(AEItemKey.of(existing))) {
                     continue;
                 }
-                if (repo == null) {
+                if (!isMeGui) {
                     NetworkAmount.requestAmount(candidate);
                     hasPendingNetworkQuery |= NetworkAmount.isQueryPending(candidate);
                 }
-                long networkAmount = NetworkAmount.knownAmount(candidate);
-                boolean candidateCraftable = NetworkAmount.knownCraftable(candidate);
+                long networkAmount = !isMeGui ? Math.max(0, NetworkAmount.knownAmount(candidate)) : 0;
+                boolean candidateCraftable = !isMeGui && NetworkAmount.knownCraftable(candidate);
                 if (repo != null) {
                     GridInventoryEntry entry = repo.getByKey(candidate);
                     if (entry != null) {
@@ -261,34 +273,50 @@ public final class StandardRecipeTransferHandler<C extends Container> implements
                         candidateCraftable |= entry.craftable();
                     }
                 }
-                long total = available.getLong(candidate) - reserved.getLong(candidate);
-                if (networkAmount > 0) {
-                    total = total > Long.MAX_VALUE - networkAmount ? Long.MAX_VALUE : total + networkAmount;
-                }
+                long localAvailable = Math.max(0, available.getLong(candidate) - reservedLocal.getLong(candidate));
+                long networkAvailable = Math.max(0, networkAmount - reservedNetwork.getLong(candidate));
+                long total = localAvailable > Long.MAX_VALUE - networkAvailable
+                    ? Long.MAX_VALUE : localAvailable + networkAvailable;
                 if (total > bestAvailable) {
                     selected = candidate;
                     bestAvailable = total;
+                    bestLocalAvailable = localAvailable;
+                    bestNetworkAvailable = networkAvailable;
                     bestCraftable = candidateCraftable;
                 }
             }
             if (selected == null) {
-                missing.add(guiSlots.get(i).intValue());
+                missing.add(guiSlots.getInt(i));
                 continue;
             }
             long supplied = Math.clamp(bestAvailable, 0, input.amount());
             if (supplied > 0) {
-                hasAvailableIngredients = true;
-                reserved.addTo(selected, supplied);
+                long suppliedLocally = Math.min(supplied, bestLocalAvailable);
+                hasAvailableIngredients |= suppliedLocally > 0;
+                if (suppliedLocally > 0) {
+                    reservedLocal.addTo(selected, suppliedLocally);
+                }
+                long suppliedNetwork = supplied - suppliedLocally;
+                if (suppliedNetwork > 0) {
+                    reservedNetwork.addTo(selected, suppliedNetwork);
+                }
+            }
+            int guiSlot = guiSlots.getInt(i);
+            boolean availableInNetwork = !isMeGui
+                && bestNetworkAvailable > 0
+                && bestLocalAvailable < input.amount();
+            if (availableInNetwork) {
+                network.add(guiSlot);
             }
             if (supplied < input.amount()) {
                 if (bestCraftable) {
-                    craftable.add(guiSlots.get(i).intValue());
+                    craftable.add(guiSlot);
                 } else {
-                    missing.add(guiSlots.get(i).intValue());
+                    missing.add(guiSlot);
                 }
             }
         }
-        return CraftingRecipeTransferAnalysis.analyzeGuiSlots(missing, craftable, inputs.size(),
+        return CraftingRecipeTransferAnalysis.analyzeGuiSlots(missing, craftable, network, inputs.size(),
             hasAvailableIngredients, hasPendingNetworkQuery);
     }
 
@@ -342,7 +370,7 @@ public final class StandardRecipeTransferHandler<C extends Container> implements
         slots = orderedRecipeSlots(slots);
 
         var requests = new ObjectArrayList<RecipeTransferPacket.Input>(Math.min(slots.size(), ingredients.size()));
-        var guiSlots = new ObjectArrayList<Integer>(Math.min(slots.size(), ingredients.size()));
+        var guiSlots = new IntArrayList(Math.min(slots.size(), ingredients.size()));
         int count = Math.min(slots.size(), ingredients.size());
         for (int i = 0; i < count; i++) {
             InputIngredient inputIngredient = ingredients.get(i);

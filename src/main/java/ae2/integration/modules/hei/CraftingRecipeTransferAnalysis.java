@@ -13,6 +13,7 @@ record CraftingRecipeTransferAnalysis(
     Outcome outcome,
     IntSet missingGuiSlots,
     IntSet craftableGuiSlots,
+    IntSet networkGuiSlots,
     int ingredientCount,
     boolean hasAvailableIngredients,
     boolean hasPendingNetworkQuery) {
@@ -20,23 +21,33 @@ record CraftingRecipeTransferAnalysis(
     CraftingRecipeTransferAnalysis {
         missingGuiSlots = IntSets.unmodifiable(missingGuiSlots);
         craftableGuiSlots = IntSets.unmodifiable(craftableGuiSlots);
+        networkGuiSlots = IntSets.unmodifiable(networkGuiSlots);
     }
 
     static CraftingRecipeTransferAnalysis analyze(ContainerCraftingTerm.MissingIngredientSlots missingSlots,
                                                   int ingredientCount) {
-        return analyze(missingSlots.missingSlots(), missingSlots.craftableSlots(), ingredientCount, true,
-            missingSlots.missingSlots().size() + missingSlots.craftableSlots().size() < ingredientCount, false);
+        return analyze(missingSlots.missingSlots(), missingSlots.craftableSlots(), IntSets.EMPTY_SET, ingredientCount,
+            true, missingSlots.missingSlots().size() + missingSlots.craftableSlots().size() < ingredientCount, false);
     }
 
     static CraftingRecipeTransferAnalysis analyzeGuiSlots(IntSet missingSlots, IntSet craftableSlots,
                                                           int ingredientCount, boolean hasAvailableIngredients,
                                                           boolean hasPendingNetworkQuery) {
-        return analyze(missingSlots, craftableSlots, ingredientCount, false, hasAvailableIngredients,
-            hasPendingNetworkQuery);
+        return analyzeGuiSlots(missingSlots, craftableSlots, IntSets.EMPTY_SET, ingredientCount,
+            hasAvailableIngredients, hasPendingNetworkQuery);
+    }
+
+    static CraftingRecipeTransferAnalysis analyzeGuiSlots(IntSet missingSlots, IntSet craftableSlots,
+                                                          IntSet networkSlots, int ingredientCount,
+                                                          boolean hasAvailableIngredients,
+                                                          boolean hasPendingNetworkQuery) {
+        return analyze(missingSlots, craftableSlots, networkSlots, ingredientCount, false,
+            hasAvailableIngredients, hasPendingNetworkQuery);
     }
 
     private static CraftingRecipeTransferAnalysis analyze(IntSet missingSlots, IntSet craftableSlots,
-                                                          int ingredientCount, boolean craftingGridSlots,
+                                                          IntSet networkSlots, int ingredientCount,
+                                                          boolean craftingGridSlots,
                                                           boolean hasAvailableIngredients,
                                                           boolean hasPendingNetworkQuery) {
         int unavailableCount = missingSlots.size() + craftableSlots.size();
@@ -56,7 +67,8 @@ record CraftingRecipeTransferAnalysis(
 
         return new CraftingRecipeTransferAnalysis(outcome,
             craftingGridSlots ? toGuiSlots(missingSlots) : missingSlots,
-            craftingGridSlots ? toGuiSlots(craftableSlots) : craftableSlots, ingredientCount,
+            craftingGridSlots ? toGuiSlots(craftableSlots) : craftableSlots,
+            craftingGridSlots ? toGuiSlots(networkSlots) : networkSlots, ingredientCount,
             hasAvailableIngredients, hasPendingNetworkQuery);
     }
 
@@ -77,12 +89,16 @@ record CraftingRecipeTransferAnalysis(
         return !craftableGuiSlots.isEmpty();
     }
 
+    boolean hasNetworkAvailableIngredients() {
+        return !networkGuiSlots.isEmpty();
+    }
+
     boolean hasPotentiallyCraftableMissingIngredients() {
         return hasCraftableMissingIngredients() || hasPendingNetworkQuery;
     }
 
     boolean canTransfer() {
-        return hasAvailableIngredients || hasPotentiallyCraftableMissingIngredients();
+        return hasAvailableIngredients || hasNetworkAvailableIngredients() || hasPotentiallyCraftableMissingIngredients();
     }
 
     boolean hasUncraftableMissingIngredients() {
@@ -98,6 +114,12 @@ record CraftingRecipeTransferAnalysis(
     IntCollection getCraftableGuiSlots() {
         IntList result = new IntArrayList(craftableGuiSlots.size());
         result.addAll(craftableGuiSlots);
+        return result;
+    }
+
+    IntCollection getNetworkGuiSlots() {
+        IntList result = new IntArrayList(networkGuiSlots.size());
+        result.addAll(networkGuiSlots);
         return result;
     }
 

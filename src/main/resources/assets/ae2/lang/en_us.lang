@@ -61,6 +61,7 @@ ae2.itemlist_integration.P2P_TAG_ATTUNEMENT=Attune with any shown item
 ae2.itemlist_integration.P2P_TUNNEL_ATTUNEMENT=P2P Tunnel Attunement
 ae2.itemlist_integration.RecipeTooLarge=Recipe too large
 ae2.itemlist_integration.RecipeTransferImportsAvailable=Available ingredients will be imported.
+ae2.itemlist_integration.RecipeTransferNetworkAvailable=Missing ingredients found in the ME network will be imported.
 ae2.itemlist_integration.RecipeTransferRequestsCraftableMissing=CTRL + left-click + to request missing craftable ingredients from the ME network.
 ae2.itemlist_integration.RecipeTransferLeavesMissing=Other missing ingredients will remain missing.
 ae2.itemlist_integration.StoredEnergy=Stored energy: %s

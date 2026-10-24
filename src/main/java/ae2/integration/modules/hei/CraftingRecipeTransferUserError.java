@@ -21,17 +21,20 @@ final class CraftingRecipeTransferUserError implements IRecipeTransferError {
     private final List<String> tooltip;
     private final IntCollection missingGuiSlots;
     private final IntCollection craftableGuiSlots;
+    private final IntCollection networkGuiSlots;
     private final boolean transferEnabled;
 
     private CraftingRecipeTransferUserError(IRecipeLayout recipeLayout,
                                             List<String> tooltip,
                                             IntCollection missingGuiSlots,
                                             IntCollection craftableGuiSlots,
+                                            IntCollection networkGuiSlots,
                                             boolean transferEnabled) {
         this.recipeLayout = recipeLayout;
         this.tooltip = tooltip;
         this.missingGuiSlots = IntCollections.unmodifiable(missingGuiSlots);
         this.craftableGuiSlots = IntCollections.unmodifiable(craftableGuiSlots);
+        this.networkGuiSlots = IntCollections.unmodifiable(networkGuiSlots);
         this.transferEnabled = transferEnabled;
     }
 
@@ -51,6 +54,9 @@ final class CraftingRecipeTransferUserError implements IRecipeTransferError {
         if (analysis.hasImmediatelyAvailableIngredients()) {
             tooltip.add(TextFormatting.RED + ItemModText.RecipeTransferImportsAvailable.getLocal());
         }
+        if (analysis.hasNetworkAvailableIngredients()) {
+            tooltip.add(TextFormatting.GREEN + ItemModText.RecipeTransferNetworkAvailable.getLocal());
+        }
         if (analysis.hasPotentiallyCraftableMissingIngredients()) {
             tooltip.add(TextFormatting.RED + ItemModText.RecipeTransferRequestsCraftableMissing.getLocal());
         }
@@ -65,7 +71,7 @@ final class CraftingRecipeTransferUserError implements IRecipeTransferError {
         }
 
         return new CraftingRecipeTransferUserError(recipeLayout, tooltip, analysis.getMissingGuiSlots(),
-            analysis.getCraftableGuiSlots(), transferEnabled);
+            analysis.getCraftableGuiSlots(), analysis.getNetworkGuiSlots(), transferEnabled);
     }
 
     @Override
@@ -81,7 +87,7 @@ final class CraftingRecipeTransferUserError implements IRecipeTransferError {
         int screenHeight = minecraft.currentScreen != null ? minecraft.currentScreen.height : minecraft.displayHeight;
 
         RecipeTransferHighlightHelper.drawHighlights(minecraft, recipeLayout, missingGuiSlots, craftableGuiSlots,
-            recipeX, recipeY);
+            networkGuiSlots, recipeX, recipeY);
 
         GuiUtils.drawHoveringText(tooltip, mouseX, mouseY, screenWidth, screenHeight, 150,
             minecraft.fontRenderer);

@@ -61,6 +61,7 @@ ae2.itemlist_integration.P2P_TAG_ATTUNEMENT=使用任一展示的物品调谐
 ae2.itemlist_integration.P2P_TUNNEL_ATTUNEMENT=P2P通道调谐
 ae2.itemlist_integration.RecipeTooLarge=配方过大
 ae2.itemlist_integration.RecipeTransferImportsAvailable=可用材料将被导入。
+ae2.itemlist_integration.RecipeTransferNetworkAvailable=网络中存在的缺失材料将被导入。
 ae2.itemlist_integration.RecipeTransferRequestsCraftableMissing=CTRL+左键点击 + 向ME网络请求缺失的可合成材料。
 ae2.itemlist_integration.RecipeTransferLeavesMissing=其余缺失材料将保持缺失。
 ae2.itemlist_integration.StoredEnergy=已存储能量：%s

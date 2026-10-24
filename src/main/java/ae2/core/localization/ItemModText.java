@@ -12,6 +12,7 @@ public enum ItemModText implements LocalizationEnum {
     CRANK_DESCRIPTION,
     RecipeTooLarge,
     RecipeTransferImportsAvailable,
+    RecipeTransferNetworkAvailable,
     RecipeTransferRequestsCraftableMissing,
     RecipeTransferLeavesMissing,
     StoredEnergy,

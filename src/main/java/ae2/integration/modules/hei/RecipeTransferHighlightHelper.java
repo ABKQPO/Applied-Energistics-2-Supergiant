@@ -2,6 +2,7 @@ package ae2.integration.modules.hei;
 
 import it.unimi.dsi.fastutil.ints.Int2ObjectMap;
 import it.unimi.dsi.fastutil.ints.IntCollection;
+import it.unimi.dsi.fastutil.ints.IntSets;
 import mezz.jei.api.gui.IGuiIngredient;
 import mezz.jei.api.gui.IRecipeLayout;
 import net.minecraft.client.Minecraft;
@@ -13,16 +14,24 @@ import java.util.Map;
 final class RecipeTransferHighlightHelper {
     private static final Color MISSING_SLOT_COLOR = new Color(1.0f, 0.0f, 0.0f, 0.4f);
     private static final Color CRAFTABLE_SLOT_COLOR = new Color(0.2f, 0.45f, 1.0f, 0.4f);
+    private static final Color NETWORK_SLOT_COLOR = new Color(0.2f, 0.8f, 0.2f, 0.4f);
 
     private RecipeTransferHighlightHelper() {
     }
 
     static void drawHighlights(Minecraft minecraft, IRecipeLayout recipeLayout, IntCollection missingGuiSlots,
                                IntCollection craftableGuiSlots, int recipeX, int recipeY) {
+        drawHighlights(minecraft, recipeLayout, missingGuiSlots, craftableGuiSlots, IntSets.EMPTY_SET,
+            recipeX, recipeY);
+    }
+
+    static void drawHighlights(Minecraft minecraft, IRecipeLayout recipeLayout, IntCollection missingGuiSlots,
+                               IntCollection craftableGuiSlots, IntCollection networkGuiSlots, int recipeX, int recipeY) {
         Map<Integer, ? extends IGuiIngredient<ItemStack>> ingredients = recipeLayout.getItemStacks()
                                                                                     .getGuiIngredients();
         drawHighlights(minecraft, ingredients, missingGuiSlots, MISSING_SLOT_COLOR, recipeX, recipeY);
         drawHighlights(minecraft, ingredients, craftableGuiSlots, CRAFTABLE_SLOT_COLOR, recipeX, recipeY);
+        drawHighlights(minecraft, ingredients, networkGuiSlots, NETWORK_SLOT_COLOR, recipeX, recipeY);
     }
 
     private static void drawHighlights(Minecraft minecraft, Map<Integer, ? extends IGuiIngredient<ItemStack>> ingredients,
