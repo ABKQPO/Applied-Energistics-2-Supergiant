@@ -56,7 +56,7 @@ Crafting calculations and storage synchronization use caching and incremental up
 
 ## Addon Compatibility
 
-This branch is not compatible with mods built against the 1.12.2 version of [AppliedEnergistics/Applied-Energistics-2](https://github.com/AppliedEnergistics/Applied-Energistics-2) or [AE2-UEL/Applied-Energistics-2](https://github.com/AE2-UEL/Applied-Energistics-2). [AppliedCompatibility](https://github.com/FormlessDragon/AppliedCompatibility) is the compatibility mod for this project. It keeps compatibility with mods that work against those two projects without depending on them, and should usually be installed alongside this one.
+This branch is not compatible with mods that depend on the 1.12.2 version of [AppliedEnergistics/Applied-Energistics-2](https://github.com/AppliedEnergistics/Applied-Energistics-2) or [AE2-UEL/Applied-Energistics-2](https://github.com/AE2-UEL/Applied-Energistics-2). For mods that only use parts of the API of those two projects, [AppliedCompatibility](https://github.com/FormlessDragon/AppliedCompatibility) provides a compatibility layer. AppliedCompatibility is the compatibility mod for this project; it restores compatibility with those mods without depending on either of the two original projects, and should usually be installed alongside this one.
 
 ## Upstream
 
